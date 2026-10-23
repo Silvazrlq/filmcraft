@@ -397,6 +397,12 @@ fn spatial_apply(p: vec2<i32>) -> vec4<f32> {
             let pixel = uv * vec2(m2.yz);
             return sample_bilinear(pixel.x, pixel.y);
         }
+        case 75u: {
+            let m0=u.p0;let m1=u.p1;let m2=u.p2;
+            let den=m1.z*q.x+m1.w*q.y+m2.x;
+            if abs(den)<1e-12||m2.y/den<=0.0{return vec4(0.0);}
+            return sample_bilinear((m0.x*q.x+m0.y*q.y+m0.z)/den,(m0.w*q.x+m1.x*q.y+m1.y)/den);
+        }
         case 73u: {
             let bounds = vec4(u.p0.x, u.p0.y, u.p0.z, u.p0.w);
             let d = spatial_round_rect_sdf(q, bounds, u.p1.x);

@@ -629,8 +629,8 @@ fn lumetri_op(c: vec3<f32>, p: vec2<i32>) -> vec3<f32> {
 fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
     let s = size();
     let pc = vec2<f32>(p) + 0.5;
-    if op >= 64u && op <= 74u { return spatial_apply(p); }
-    if op >= 96u && op <= 106u { return procedural_apply(p); }
+    if op >= 64u && op <= 75u { return spatial_apply(p); }
+    if (op >= 96u && op <= 106u) || op == 109u { return procedural_apply(p); }
     if op == 160u { return median_apply(p); }
     if op >= 128u && op <= 129u { return stylize_apply(p); }
     if op >= 107u && op <= 108u { return legacy_wipes_apply(p); }

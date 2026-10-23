@@ -10,21 +10,123 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SpatialOp {
-    Mosaic { bx: f32, by: f32, softness: f32, nx: u32, ny: u32, legacy: bool },
-    Replicate { count: u32 },
-    Twirl { cx: f64, cy: f64, angle: f64, radius: f64 },
-    Spherize { cx: f32, cy: f32, radius: f32 },
-    Magnify { cx: f32, cy: f32, magnification: f32, radius: f32, feather: f32, opacity: f32, square: bool, mode: u32 },
-    LensDistortion { cx: f64, cy: f64, k: f64, norm: f64 },
-    WaveWarp { height: f64, width: f64, dir: f64, phase: f64 },
-    TurbulentDisplace { kind: u32, amount: f32, size: f32, ox: f32, oy: f32, complexity: f32, seed: u64, ex: f32, ey: f32, ez: f32, pin: u32 },
-    CornerPin { inv: [f32; 9], w: f32, h: f32 },
-    RoundedCrop { l: f32, t: f32, r: f32, b: f32, radius: f32, feather: f32, border: f32, color: [f32; 3] },
-    RgbSplit { amount: f32, radial: bool, angle: f32, cx: f32, cy: f32, blend: f32, maxd: f32 },
-    VrChromatic { aberration: [f32; 3], center: [f32; 2], falloff: f32, inverse: bool, layout: u32 },
-    VrColorGradients { points: [[f32; 2]; 3], colors: [[f32; 3]; 3], blend: f32, opacity: f32, mode: u32, layout: u32 },
-    VrProjection { matrix: [f64; 9], kx: f64, ky: f64, layout: u32, identity: bool, projection: bool },
-    VrPlaneToSphere { matrix: [f64; 9], tx: f64, feather: f32, layout: u32 },
+    Mosaic {
+        bx: f32,
+        by: f32,
+        softness: f32,
+        nx: u32,
+        ny: u32,
+        legacy: bool,
+    },
+    Replicate {
+        count: u32,
+    },
+    Twirl {
+        cx: f64,
+        cy: f64,
+        angle: f64,
+        radius: f64,
+    },
+    Spherize {
+        cx: f32,
+        cy: f32,
+        radius: f32,
+    },
+    Magnify {
+        cx: f32,
+        cy: f32,
+        magnification: f32,
+        radius: f32,
+        feather: f32,
+        opacity: f32,
+        square: bool,
+        mode: u32,
+    },
+    LensDistortion {
+        cx: f64,
+        cy: f64,
+        k: f64,
+        norm: f64,
+    },
+    WaveWarp {
+        height: f64,
+        width: f64,
+        dir: f64,
+        phase: f64,
+    },
+    TurbulentDisplace {
+        kind: u32,
+        amount: f32,
+        size: f32,
+        ox: f32,
+        oy: f32,
+        complexity: f32,
+        seed: u64,
+        ex: f32,
+        ey: f32,
+        ez: f32,
+        pin: u32,
+    },
+    CornerPin {
+        inv: [f32; 9],
+        w: f32,
+        h: f32,
+    },
+    /// A plane seen through a pinhole camera (3D Rotate, Basic 3D): `m` maps an output pixel to a source
+    /// pixel as a homography; `nc` is the plane normal dotted with its centre, whose sign against the
+    /// divisor tells whether the plane is in front of the camera.
+    Projective3d {
+        m: [f32; 9],
+        nc: f32,
+    },
+    RoundedCrop {
+        l: f32,
+        t: f32,
+        r: f32,
+        b: f32,
+        radius: f32,
+        feather: f32,
+        border: f32,
+        color: [f32; 3],
+    },
+    RgbSplit {
+        amount: f32,
+        radial: bool,
+        angle: f32,
+        cx: f32,
+        cy: f32,
+        blend: f32,
+        maxd: f32,
+    },
+    VrChromatic {
+        aberration: [f32; 3],
+        center: [f32; 2],
+        falloff: f32,
+        inverse: bool,
+        layout: u32,
+    },
+    VrColorGradients {
+        points: [[f32; 2]; 3],
+        colors: [[f32; 3]; 3],
+        blend: f32,
+        opacity: f32,
+        mode: u32,
+        layout: u32,
+    },
+    VrProjection {
+        matrix: [f64; 9],
+        kx: f64,
+        ky: f64,
+        layout: u32,
+        identity: bool,
+        projection: bool,
+    },
+    VrPlaneToSphere {
+        matrix: [f64; 9],
+        tx: f64,
+        feather: f32,
+        layout: u32,
+    },
 }
 
 impl SpatialOp {
@@ -124,6 +226,27 @@ impl SpatialOp {
                 let inv = spatial_h_inverse(&m)?;
                 Self::CornerPin { inv: inv.map(|x| x as f32), w: wf, h: hf }
             }
+            "rotate_3d" | "basic_3d" => {
+                let (wd, hd) = (w as f64, h as f64);
+                let plane = if e.effect == "rotate_3d" {
+                    match crate::vfx::rotate_3d_plane(e, cx, wd, hd) {
+                        // untouched: the identity homography resamples every pixel at its own centre
+                        crate::vfx::Rotate3d::Identity => {
+                            crate::vfx::Plane3d { f: wd.max(hd), cz: wd.max(hd), n: [0.0, 0.0, 1.0], u: [1.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] }
+                        }
+                        // facing away with Hide Backside: every pixel is cleared (nc = 0 means "never in front")
+                        crate::vfx::Rotate3d::Hidden => return Some(Self::Projective3d { m: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], nc: 0.0 }),
+                        crate::vfx::Rotate3d::Plane(plane) => plane,
+                    }
+                } else {
+                    crate::effects::basic_3d_plane(e, cx, wd, hd)
+                };
+                // Perspective 0 puts the camera 1e7 pixels away: the coefficients would lose f32 precision.
+                if plane.f > 100_000.0 {
+                    return None;
+                }
+                Self::projective_3d(wd, hd, &plane)
+            }
             "rounded_crop" => {
                 let l = f(e, "left", cx) / 100.0 * wf;
                 let t = f(e, "top", cx) / 100.0 * hf;
@@ -222,6 +345,22 @@ impl SpatialOp {
         })
     }
 
+    /// Homography of `plane` for a `w` x `h` image, computed in f64: with d = (x - w/2, y - h/2, f), the
+    /// source x is (nc (d.u) - cz u.z (n.d)) / (n.d) + w/2, and likewise for y with `v`.
+    fn projective_3d(w: f64, h: f64, plane: &crate::vfx::Plane3d) -> Self {
+        let crate::vfx::Plane3d { f, cz, n, u, v } = *plane;
+        let nc = n[2] * cz;
+        // a . d as coefficients of (x, y, 1)
+        let row = |a: [f64; 3]| [a[0], a[1], -a[0] * w / 2.0 - a[1] * h / 2.0 + a[2] * f];
+        let (den, du, dv) = (row(n), row(u), row(v));
+        let m: [f64; 9] = std::array::from_fn(|i| match i / 3 {
+            0 => nc * du[i % 3] - cz * u[2] * den[i % 3] + w / 2.0 * den[i % 3],
+            1 => nc * dv[i % 3] - cz * v[2] * den[i % 3] + h / 2.0 * den[i % 3],
+            _ => den[i % 3],
+        });
+        Self::Projective3d { m: m.map(|x| x as f32), nc: nc as f32 }
+    }
+
     pub fn gpu_ok(&self) -> bool {
         let finite = |v: &[f32]| v.iter().all(|x| x.is_finite());
         let finite_f32 = |v: &[f64]| v.iter().all(|x| x.is_finite() && (*x as f32).is_finite());
@@ -234,6 +373,7 @@ impl SpatialOp {
                 finite(&[*cx, *cy, *magnification, *radius, *feather, *opacity]) && *magnification > 0.0
             }
             Self::CornerPin { inv, w, h } => finite(inv) && finite(&[*w, *h]) && *w > 0.0 && *h > 0.0,
+            Self::Projective3d { m, nc } => finite(m) && nc.is_finite(),
             Self::TurbulentDisplace { amount, size, ox, oy, complexity, seed: _, ex, ey, ez, .. } => {
                 finite(&[*amount, *size, *ox, *oy, *complexity, *ex, *ey, *ez])
                     && *size >= 0.5
@@ -288,6 +428,7 @@ impl SpatialOp {
             Self::WaveWarp { .. } => id == "wave_warp",
             Self::TurbulentDisplace { .. } => id == "turbulent_displace",
             Self::CornerPin { .. } => id == "corner_pin",
+            Self::Projective3d { .. } => id == "rotate_3d" || id == "basic_3d",
             Self::RoundedCrop { .. } => id == "rounded_crop",
             Self::RgbSplit { .. } => id == "rgb_split",
             Self::VrChromatic { .. } => id == "vr_chromatic_aberrations",
@@ -346,6 +487,11 @@ impl SpatialOp {
                 p[9] = *w;
                 p[10] = *h;
                 72
+            }
+            Self::Projective3d { m, nc } => {
+                p[..9].copy_from_slice(m);
+                p[9] = *nc;
+                75
             }
             Self::RoundedCrop { l, t, r, b, radius, feather, border, color } => {
                 p[..10].copy_from_slice(&[*l, *t, *r, *b, *radius, *feather, *border, color[0], color[1], color[2]]);
@@ -505,6 +651,14 @@ impl SpatialOp {
                             } else {
                                 out = [0.0; 4];
                             }
+                        }
+                    }
+                    Self::Projective3d { m, nc } => {
+                        let den = m[6] * px + m[7] * py + m[8];
+                        if den.abs() < 1e-12 || nc / den <= 0.0 {
+                            out = [0.0; 4];
+                        } else {
+                            out = src.sample_bilinear((m[0] * px + m[1] * py + m[2]) / den, (m[3] * px + m[4] * py + m[5]) / den);
                         }
                     }
                     Self::TurbulentDisplace { kind, amount, size, ox, oy, complexity, seed, ex, ey, ez, pin } => {
@@ -897,6 +1051,33 @@ mod tests {
             }
         }
         image
+    }
+
+    #[test]
+    fn projective_3d_matches_the_cpu_effects() {
+        for (id, params) in [
+            ("rotate_3d", vec![("rot_x", 25.0), ("rot_y", -30.0), ("rot_z", 12.0), ("perspective", 60.0)]),
+            ("rotate_3d", vec![("rot_x", 70.0), ("z", 3.0), ("perspective", 90.0)]),
+            ("rotate_3d", vec![("rot_y", 160.0), ("perspective", 40.0)]),
+            ("rotate_3d", vec![("rot_z", 45.0), ("perspective", 10.0)]),
+            ("basic_3d", vec![("swivel", 40.0), ("tilt", -20.0), ("distance", 1.5)]),
+            ("basic_3d", vec![("swivel", -120.0), ("tilt", 35.0), ("distance", -3.0)]),
+        ] {
+            let mut effect = find_effect(id).unwrap_or_else(|| panic!("missing effect {id}")).instance();
+            for (key, value) in &params {
+                effect.params.get_mut(*key).unwrap_or_else(|| panic!("{id} has no {key}")).value = ParamValue::Float(*value);
+            }
+            let ctx = context();
+            let op = SpatialOp::eval(&effect, &ctx, 7, 5).unwrap_or_else(|| panic!("no spatial operation for {id}"));
+            assert!(op.gpu_ok(), "{id} {params:?}");
+            let mut expected = source();
+            crate::effects::apply(&mut expected, &effect, &ctx);
+            let mut actual = source();
+            op.apply(&mut actual);
+            for (index, (a, b)) in actual.px.iter().zip(&expected.px).enumerate() {
+                assert!((a - b).abs() < 2e-4, "{id} {params:?} component {index}: {a} != {b}");
+            }
+        }
     }
 
     #[test]

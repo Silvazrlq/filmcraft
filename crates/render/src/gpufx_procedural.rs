@@ -10,17 +10,98 @@ use crate::image::Image;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProceduralOp {
-    Checkerboard { anchor: [f32; 2], size: [f32; 2], feather: f32, color: [f32; 3], opacity: f32, mode: u32 },
-    Grid { size: f32, border: f32, color: [f32; 3], opacity: f32 },
-    Circle { center: [f32; 2], radius: f32, color: [f32; 3], opacity: f32 },
-    Ellipse { center: [f32; 2], radii: [f32; 2], thickness: f32, softness: f32, inside: [f32; 3], outside: [f32; 3], composite: bool },
-    Ramp { start: [f32; 2], end: [f32; 2], start_color: [f32; 4], end_color: [f32; 4], radial: bool, blend: f32 },
-    Gradient { start: [f32; 2], end: [f32; 2], start_color: [f32; 4], end_color: [f32; 4], shape: u32, scatter: f32, gamma: f32, blend: f32 },
-    FourColorGradient { colors: [[f32; 3]; 4], blend_exp: f32, opacity: f32, size: [f32; 2] },
-    CellPattern { pattern: u32, invert: bool, contrast: f32, overflow: u32, disperse: f32, size: f32, offset: [f32; 2], evolution: f32, seed: u32 },
-    Emboss { direction: [f32; 2], relief: f32, contrast: f32, blend: f32, color: bool },
-    FindEdges { invert: bool, blend: f32 },
-    Strobe { color: [f32; 3], blend: f32, active: bool },
+    Checkerboard {
+        anchor: [f32; 2],
+        size: [f32; 2],
+        feather: f32,
+        color: [f32; 3],
+        opacity: f32,
+        mode: u32,
+    },
+    Grid {
+        size: f32,
+        border: f32,
+        color: [f32; 3],
+        opacity: f32,
+    },
+    Circle {
+        center: [f32; 2],
+        radius: f32,
+        color: [f32; 3],
+        opacity: f32,
+    },
+    Ellipse {
+        center: [f32; 2],
+        radii: [f32; 2],
+        thickness: f32,
+        softness: f32,
+        inside: [f32; 3],
+        outside: [f32; 3],
+        composite: bool,
+    },
+    Ramp {
+        start: [f32; 2],
+        end: [f32; 2],
+        start_color: [f32; 4],
+        end_color: [f32; 4],
+        radial: bool,
+        blend: f32,
+    },
+    Gradient {
+        start: [f32; 2],
+        end: [f32; 2],
+        start_color: [f32; 4],
+        end_color: [f32; 4],
+        shape: u32,
+        scatter: f32,
+        gamma: f32,
+        blend: f32,
+    },
+    FourColorGradient {
+        colors: [[f32; 3]; 4],
+        blend_exp: f32,
+        opacity: f32,
+        size: [f32; 2],
+    },
+    CellPattern {
+        pattern: u32,
+        invert: bool,
+        contrast: f32,
+        overflow: u32,
+        disperse: f32,
+        size: f32,
+        offset: [f32; 2],
+        evolution: f32,
+        seed: u32,
+    },
+    Emboss {
+        direction: [f32; 2],
+        relief: f32,
+        contrast: f32,
+        blend: f32,
+        color: bool,
+    },
+    FindEdges {
+        invert: bool,
+        blend: f32,
+    },
+    Strobe {
+        color: [f32; 3],
+        blend: f32,
+        active: bool,
+    },
+    /// Lens Flare: `t`/`r` are the position along the line through the frame centre and the radius of each
+    /// of the first `ghosts` ghosts (their hue follows the index); `k` is brightness times (1 - blend).
+    LensFlare {
+        c: [f32; 2],
+        scale: f32,
+        k: f32,
+        tint: [f32; 3],
+        lens: u32,
+        ghosts: u32,
+        t: [f32; 8],
+        r: [f32; 8],
+    },
 }
 
 impl ProceduralOp {
@@ -143,6 +224,23 @@ impl ProceduralOp {
                 }
             }
             "find_edges" => Self::FindEdges { invert: bv(e, "invert"), blend: fv(e, "blend", cx) / 100.0 },
+            "lens_flare" => {
+                let f = crate::vfx::lens_flare_params(e, cx, w, h);
+                let (mut t, mut r) = ([0.0f32; 8], [0.0f32; 8]);
+                for (i, (gt, gr, _)) in f.ghosts.iter().take(8).enumerate() {
+                    (t[i], r[i]) = (*gt as f32, *gr as f32);
+                }
+                Self::LensFlare {
+                    c: [f.c.x as f32, f.c.y as f32],
+                    scale: f.scale as f32,
+                    k: f.k,
+                    tint: f.tint,
+                    lens: f.lens,
+                    ghosts: f.ghosts.len().min(8) as u32,
+                    t,
+                    r,
+                }
+            }
             "strobe" => {
                 let period = fv(e, "period", cx).max(0.001) as f64;
                 let active = cx.seconds % period < fv(e, "duration", cx) as f64;
@@ -167,6 +265,7 @@ impl ProceduralOp {
                 | (Self::Emboss { color: true, .. }, "color_emboss")
                 | (Self::FindEdges { .. }, "find_edges")
                 | (Self::Strobe { .. }, "strobe")
+                | (Self::LensFlare { .. }, "lens_flare")
         )
     }
 
@@ -190,6 +289,9 @@ impl ProceduralOp {
             Self::Emboss { direction, relief, contrast, blend, .. } => fin(direction) && fin(&[*relief, *contrast, *blend]),
             Self::FindEdges { blend, .. } => blend.is_finite(),
             Self::Strobe { color, blend, .. } => fin(color) && blend.is_finite(),
+            Self::LensFlare { c, scale, k, tint, ghosts, t, r, .. } => {
+                fin(c) && fin(tint) && fin(t) && fin(r) && fin(&[*scale, *k]) && *scale > 0.0 && *ghosts <= 8
+            }
         }
     }
 
@@ -291,6 +393,17 @@ impl ProceduralOp {
                 p[0..3].copy_from_slice(color);
                 put!(3, *blend);
                 106
+            }
+            Self::LensFlare { c, scale, k, tint, lens, ghosts, t, r } => {
+                i[0] = *lens;
+                i[1] = *ghosts;
+                p[0..2].copy_from_slice(c);
+                put!(2, *scale);
+                put!(3, *k);
+                p[4..7].copy_from_slice(tint);
+                p[8..16].copy_from_slice(t);
+                p[16..24].copy_from_slice(r);
+                109
             }
         };
         (op, i, p)
@@ -482,6 +595,22 @@ impl ProceduralOp {
                         }
                         let g = m * p[3] * (1.0 - *blend);
                         [g + p[0] * *blend, g + p[1] * *blend, g + p[2] * *blend, p[3]]
+                    }
+                    Self::LensFlare { c, scale, k, tint, lens, ghosts, t, r } => {
+                        let hues = [[0.4, 0.6, 1.0], [1.0, 0.5, 0.3], [0.4, 1.0, 0.5], [0.9, 0.4, 1.0]];
+                        let params = crate::vfx::LensFlareParams {
+                            c: filmcraft_geom::Vec2::new(f64::from(c[0]), f64::from(c[1])),
+                            scale: f64::from(*scale),
+                            core_k: [18.0, 26.0, 14.0, 22.0][(*lens).min(3) as usize],
+                            lens: *lens,
+                            mid: filmcraft_geom::Vec2::new(w as f64 / 2.0, h as f64 / 2.0),
+                            ghosts: (0..*ghosts as usize).map(|n| (f64::from(t[n]), f64::from(r[n]), hues[n % 4])).collect(),
+                            tint: *tint,
+                            k: *k,
+                        };
+                        let mut o = p;
+                        crate::vfx::add_light(&mut o, crate::vfx::lens_flare_add(&params, f64::from(pos[0]), f64::from(pos[1])));
+                        o
                     }
                     Self::Strobe { color, blend, active } => {
                         if !*active {

@@ -176,21 +176,38 @@ pub fn turbulent_displace(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     });
 }
 
-/// 3D Rotate: rotates the layer about its centre in 3-D (X, then Y, then Z) with perspective.
-pub fn rotate_3d(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+/// A plane seen through a pinhole camera: the plane's normal `n` and in-plane axes `u`, `v`, the focal
+/// length and the plane's distance `cz` along the optical axis. Shared by the CPU effects and the GPU plan.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Plane3d {
+    pub f: f64,
+    pub cz: f64,
+    pub n: [f64; 3],
+    pub u: [f64; 3],
+    pub v: [f64; 3],
+}
+
+/// What 3D Rotate does to a layer of this size.
+pub(crate) enum Rotate3d {
+    /// No rotation and no Z offset: the layer is untouched.
+    Identity,
+    /// Hide Backside is on and the layer faces away: it is cleared.
+    Hidden,
+    Plane(Plane3d),
+}
+
+/// The geometry of 3D Rotate: R = Rz · Ry · Rx (screen y down; positive Z is clockwise like Rotation).
+pub(crate) fn rotate_3d_plane(e: &EffectInstance, cx: &FxCtx, w: f64, h: f64) -> Rotate3d {
     let (ax, ay, az) = ((fv(e, "rot_x", cx) as f64).to_radians(), (fv(e, "rot_y", cx) as f64).to_radians(), (fv(e, "rot_z", cx) as f64).to_radians());
     let z = fv(e, "z", cx) as f64 * cx.px_scale as f64;
     if ax.abs() < 1e-9 && ay.abs() < 1e-9 && az.abs() < 1e-9 && z.abs() < 1e-9 {
-        return;
+        return Rotate3d::Identity;
     }
     let persp = fv(e, "perspective", cx).clamp(0.0, 100.0) as f64;
-    let (w, h) = (img.w as f64, img.h as f64);
     let f = if persp <= 0.0 { 1e7 } else { w.max(h) * (0.6 + (100.0 - persp) / 100.0 * 4.0) };
-    let hide = bv(e, "hide_back");
     let (sx, cxr) = ax.sin_cos();
     let (sy, cy) = ay.sin_cos();
     let (sz, cz) = az.sin_cos();
-    // R = Rz · Ry · Rx (screen y down; positive Z is clockwise like Rotation)
     let rx = [[1.0, 0.0, 0.0], [0.0, cxr, -sx], [0.0, sx, cxr]];
     let ry = [[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]];
     let rz = [[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]];
@@ -204,15 +221,32 @@ pub fn rotate_3d(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         o
     };
     let r = mul(rz, mul(ry, rx));
-    let u = [r[0][0], r[1][0], r[2][0]];
-    let v = [r[0][1], r[1][1], r[2][1]];
     let n = [r[0][2], r[1][2], r[2][2]];
-    let back = n[2] < 0.0;
-    if hide && back {
-        img.px.fill(0.0);
-        return;
+    if bv(e, "hide_back") && n[2] < 0.0 {
+        return Rotate3d::Hidden;
     }
-    let c = [0.0, 0.0, f + z];
+    Rotate3d::Plane(Plane3d { f, cz: f + z, n, u: [r[0][0], r[1][0], r[2][0]], v: [r[0][1], r[1][1], r[2][1]] })
+}
+
+/// 3D Rotate: rotates the layer about its centre in 3-D (X, then Y, then Z) with perspective.
+pub fn rotate_3d(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let (w, h) = (img.w as f64, img.h as f64);
+    let p = match rotate_3d_plane(e, cx, w, h) {
+        Rotate3d::Identity => return,
+        Rotate3d::Hidden => {
+            img.px.fill(0.0);
+            return;
+        }
+        Rotate3d::Plane(p) => p,
+    };
+    warp_plane(img, &p);
+}
+
+/// Resample `img` as the plane `p` seen through the camera (inverse mapping, `None` behind the camera).
+pub(crate) fn warp_plane(img: &mut Image, p: &Plane3d) {
+    let (w, h) = (img.w as f64, img.h as f64);
+    let Plane3d { f, cz, n, u, v } = *p;
+    let c = [0.0, 0.0, cz];
     let nc = n[0] * c[0] + n[1] * c[1] + n[2] * c[2];
     warp_opt(img, |x, y| {
         let d = [x - w / 2.0, y - h / 2.0, f];

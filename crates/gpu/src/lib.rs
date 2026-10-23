@@ -156,14 +156,16 @@ pub const TRANSITION_AMD_PARITY: &[&str] = &[
 /// `fx_tests::gpu_effects_match_cpu_exactly` before its harness stops at `replicate`, plus the
 /// `fx_tests::gpu_effect_catalog_family_parity_requires_adapter` families that match (block_dissolve
 /// and the vr_chromatic_aberrations/vr_projection/vr_rotate_sphere cases still diverge), plus
-/// gaussian_blur_legacy, directional_blur_legacy, reduce_interlace_flicker, wiggle and camera_shake
-/// (cases added to `gpu_effects_match_cpu_exactly` on 23/10/2026 against the real CPU effect: max rel
+/// gaussian_blur_legacy, directional_blur_legacy, reduce_interlace_flicker, wiggle, camera_shake,
+/// rotate_3d, basic_3d and lens_flare (perspective > 0 only: perspective 0 puts the camera 1e7 px away and the f32
+/// coefficients would lose precision, so it fails closed) (cases added to `gpu_effects_match_cpu_exactly` on 23/10/2026 against the real CPU effect: max rel
 /// diff <= 6e-6; camera_shake only without motion blur, the blurred form fails closed).
 /// The strict resident export has no CPU fallback, so it refuses every effect not listed here.
 const RESIDENT_FX_PARITY: &[&str] = &[
     "alpha_adjust",
     "alpha_glow",
     "asc_cdl",
+    "basic_3d",
     "bevel_alpha",
     "black_white",
     "brightness_contrast",
@@ -202,6 +204,7 @@ const RESIDENT_FX_PARITY: &[&str] = &[
     "invert",
     "leave_color",
     "lens_distortion",
+    "lens_flare",
     "levels",
     "linear_wipe_legacy",
     "logo_cutout",
@@ -223,6 +226,7 @@ const RESIDENT_FX_PARITY: &[&str] = &[
     "reduce_interlace_flicker",
     "replicate",
     "rgb_split",
+    "rotate_3d",
     "rounded_crop",
     "sharpen",
     "shrink",

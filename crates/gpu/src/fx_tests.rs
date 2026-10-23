@@ -256,6 +256,10 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
         ("gaussian_blur", vec![("blurriness", fl(1e9))], false),
         ("gaussian_blur", vec![("blurriness", fl(-50.0))], false),
         ("camera_blur", vec![("percent", fl(20.0))], false),
+        ("lens_flare", vec![], true),
+        ("lens_flare", vec![("lens_type", ch(1)), ("ghosts", fl(5.0)), ("size", fl(60.0)), ("center", pt(20.0, 12.0))], true),
+        ("lens_flare", vec![("lens_type", ch(2)), ("ghosts", fl(8.0)), ("center", pt(50.0, 30.0)), ("brightness", fl(150.0))], true),
+        ("lens_flare", vec![("lens_type", ch(3)), ("ghosts", fl(3.0)), ("blend", fl(30.0)), ("color", col(0.9, 0.5, 0.3))], true),
         ("gaussian_blur_legacy", vec![("blurriness", fl(5.0))], false),
         ("gaussian_blur_legacy", vec![("blurriness", fl(12.0)), ("dimensions", ch(2))], false),
         ("directional_blur_legacy", vec![("length", fl(10.0)), ("direction", fl(30.0))], false),
@@ -494,6 +498,16 @@ fn family_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> 
         ("wiggle", &[("amount", fl(20.0)), ("dimensions", ch(1)), ("seed", fl(3.0))]),
         ("camera_shake", &[("amount", fl(25.0)), ("rotation", fl(4.0)), ("zoom", fl(8.0)), ("frequency", fl(5.0)), ("complexity", fl(4.0)), ("seed", fl(9.0))]),
         ("camera_shake", &[]),
+        ("rotate_3d", &[]),
+        ("rotate_3d", &[("rot_x", fl(25.0)), ("rot_y", fl(-30.0)), ("rot_z", fl(12.0)), ("perspective", fl(60.0))]),
+        ("rotate_3d", &[("rot_x", fl(70.0)), ("z", fl(40.0)), ("perspective", fl(90.0))]),
+        ("rotate_3d", &[("rot_y", fl(160.0)), ("perspective", fl(40.0))]),
+        ("rotate_3d", &[("rot_y", fl(160.0)), ("hide_back", ParamValue::Bool(true))]),
+        ("rotate_3d", &[("rot_z", fl(45.0)), ("perspective", fl(10.0))]),
+        ("basic_3d", &[]),
+        ("basic_3d", &[("swivel", fl(40.0)), ("tilt", fl(-20.0)), ("distance", fl(15.0))]),
+        ("basic_3d", &[("swivel", fl(85.0)), ("tilt", fl(10.0))]),
+        ("basic_3d", &[("swivel", fl(-120.0)), ("tilt", fl(35.0)), ("distance", fl(-30.0))]),
         ("bevel_alpha", &[("thickness", fl(2.5)), ("angle", fl(40.0)), ("intensity", fl(65.0))]),
         ("block_dissolve", &[("completion", fl(47.0)), ("block_w", fl(2.3)), ("block_h", fl(1.7)), ("feather", fl(60.0)), ("soft", ParamValue::Bool(true))]),
         ("linear_wipe_legacy", &[("completion", fl(47.0)), ("angle", fl(38.0)), ("feather", fl(2.2))]),
@@ -631,6 +645,7 @@ fn gpu_effects_match_cpu_exactly() {
             "noise"
                 | "noise_legacy"
                 | "gaussian_blur_legacy"
+                | "lens_flare"
                 | "directional_blur_legacy"
                 | "reduce_interlace_flicker"
                 | "mosaic"
@@ -671,6 +686,8 @@ fn gpu_effects_match_cpu_exactly() {
                 | "spin"
                 | "wiggle"
                 | "camera_shake"
+                | "rotate_3d"
+                | "basic_3d"
                 | "bevel_alpha"
                 | "block_dissolve"
                 | "linear_wipe_legacy"

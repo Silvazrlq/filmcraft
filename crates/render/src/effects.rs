@@ -275,36 +275,9 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             });
         }
         "basic_3d" => {
-            let sw = (f(e, "swivel", cx) as f64).to_radians();
-            let tl = (f(e, "tilt", cx) as f64).to_radians();
-            // authored in full-resolution pixels; the focal length follows the working image (#1920)
-            let dist = f(e, "distance", cx) as f64 * cx.px_scale as f64;
             let (w, h) = (img.w as f64, img.h as f64);
-            let focal = w.max(h) * 1.2;
-            // inverse perspective mapping: ray through (x,y) intersected with rotated plane
-            warp_opt(img, |x, y| {
-                let (px, py) = (x - w / 2.0, y - h / 2.0);
-                let (ss, cs) = sw.sin_cos();
-                let (st, ct) = tl.sin_cos();
-                // plane normal after rotation (Ry(swivel) * Rx(tilt)) of (0,0,1)
-                let n = [ss * ct, -st, cs * ct];
-                let u = [cs, 0.0, -ss];
-                let v = [ss * st, ct, cs * st];
-                let z0 = focal + dist * 10.0;
-                let dir = [px, py, focal];
-                let denom = n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2];
-                if denom.abs() < 1e-9 {
-                    return None;
-                }
-                let tt = (n[2] * z0) / denom;
-                if tt <= 0.0 {
-                    return None;
-                }
-                let hit = [dir[0] * tt, dir[1] * tt, dir[2] * tt - z0];
-                let su = hit[0] * u[0] + hit[1] * u[1] + hit[2] * u[2];
-                let sv = hit[0] * v[0] + hit[1] * v[1] + hit[2] * v[2];
-                Some((su + w / 2.0, sv + h / 2.0))
-            });
+            let plane = basic_3d_plane(e, cx, w, h);
+            crate::vfx::warp_plane(img, &plane);
         }
         "drop_shadow" => {
             let c = color(e, "color", cx);
@@ -514,6 +487,18 @@ pub(crate) fn fill_over(img: &mut Image, op: f32, f: impl Fn(f32, f32) -> [f32; 
 
 pub(crate) fn warp(img: &mut Image, f: impl Fn(f64, f64) -> (f64, f64) + Sync) {
     warp_opt(img, |x, y| Some(f(x, y)));
+}
+
+/// The plane of Basic 3D: Ry(swivel) · Rx(tilt) applied to the layer, seen through a camera whose focal
+/// length follows the working image (#1920); `distance` is authored in full-resolution pixels.
+pub(crate) fn basic_3d_plane(e: &EffectInstance, cx: &FxCtx, w: f64, h: f64) -> crate::vfx::Plane3d {
+    let sw = (f(e, "swivel", cx) as f64).to_radians();
+    let tl = (f(e, "tilt", cx) as f64).to_radians();
+    let dist = f(e, "distance", cx) as f64 * cx.px_scale as f64;
+    let focal = w.max(h) * 1.2;
+    let (ss, cs) = sw.sin_cos();
+    let (st, ct) = tl.sin_cos();
+    crate::vfx::Plane3d { f: focal, cz: focal + dist * 10.0, n: [ss * ct, -st, cs * ct], u: [cs, 0.0, -ss], v: [ss * st, ct, cs * st] }
 }
 
 pub(crate) fn warp_opt(img: &mut Image, f: impl Fn(f64, f64) -> Option<(f64, f64)> + Sync) {

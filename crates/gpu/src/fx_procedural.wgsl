@@ -23,9 +23,35 @@ fn procedural_hash(x:i32,y:i32,z:i32,seed:u32)->f32 {
     return f32(h.y>>8u)/16777216.0;
 }
 fn procedural_over(d:vec4<f32>,s:vec4<f32>)->vec4<f32>{return s+d*(1.0-s.a);}
+fn procedural_lens_pick(i:u32,a:vec4<f32>,b:vec4<f32>)->f32 { let v=select(a,b,i>=4u); return v[i&3u]; }
+fn procedural_lens_hue(i:u32)->vec3<f32> {
+    let k=i&3u;
+    if k==0u {return vec3(0.4,0.6,1.0);} if k==1u {return vec3(1.0,0.5,0.3);} if k==2u {return vec3(0.4,1.0,0.5);}
+    return vec3(0.9,0.4,1.0);
+}
 fn procedural_apply(p: vec2<i32>) -> vec4<f32> {
     let o=ld(p); let x=f32(p.x)+0.5; let y=f32(p.y)+0.5;
     let op=u.i0.x;
+    if op==109u {
+        let c=u.p0.xy; let scale=u.p0.z; let k=u.p0.w; let tint=vec3(u.p1.x,u.p1.y,u.p1.z);
+        let lens=u.i1.x; let ng=u.i1.y; let mid=vec2<f32>(size())*0.5; let q=vec2(x,y);
+        var core_k=18.0; if lens==1u {core_k=26.0;} else if lens==2u {core_k=14.0;} else if lens>=3u {core_k=22.0;}
+        let d=length(q-c)/scale;
+        var add=vec3(0.35*exp(-d*core_k)+0.08*exp(-d*3.0));
+        if lens==1u||lens==2u { add+=max(1.0-abs((d-0.12)/0.012),0.0)*0.08*vec3(0.6,0.8,1.0); }
+        if lens==3u {
+            let s=exp(-(abs(q.y-c.y)/scale)*160.0)*exp(-(abs(q.x-c.x)/scale)*2.0)*0.5;
+            add+=vec3(s*0.5,s*0.7,s);
+        }
+        for (var i=0u;i<ng;i=i+1u) {
+            let t=procedural_lens_pick(i,u.p2,u.p3); let rad=procedural_lens_pick(i,u.p4,u.p5);
+            let g=c+(mid-c)*2.0*t; let dd=length(q-g)/scale;
+            let gl=max(1.0-abs((dd-rad)/0.01),0.0)*0.12+select(0.0,0.05,dd<rad);
+            add+=procedural_lens_hue(i)*gl;
+        }
+        let a=add*tint*k; let m=clamp(max(a.x,max(a.y,a.z)),0.0,1.0);
+        return vec4(o.rgb+a,o.a+(1.0-o.a)*m);
+    }
     if op==96u {
         let a=u.p0.xy; let wh=max(u.p0.zw,vec2(1.0)); let uv=(vec2(x,y)-a)/wh;
         let parity=f32((i32(floor(uv.x))+i32(floor(uv.y)))&1);

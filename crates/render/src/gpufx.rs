@@ -521,6 +521,8 @@ pub const GPU_EFFECTS: &[&str] = &[
     "twirl_legacy",
     "spherize",
     "corner_pin",
+    "rotate_3d",
+    "basic_3d",
     "turbulent_displace",
     "lens_distortion",
     "wave_warp",
@@ -538,6 +540,7 @@ pub const GPU_EFFECTS: &[&str] = &[
     "color_emboss",
     "find_edges",
     "strobe",
+    "lens_flare",
     "median",
     "grow",
     "shrink",
@@ -839,6 +842,8 @@ impl FxOp {
             | "lens_distortion"
             | "wave_warp"
             | "corner_pin"
+            | "rotate_3d"
+            | "basic_3d"
             | "turbulent_displace"
             | "rounded_crop"
             | "rgb_split"
@@ -864,7 +869,8 @@ impl FxOp {
             | "emboss"
             | "color_emboss"
             | "find_edges"
-            | "strobe" => {
+            | "strobe"
+            | "lens_flare" => {
                 let op = ProceduralOp::eval(e, cx, w, h)?;
                 if !op.gpu_ok() {
                     return None;
@@ -1882,7 +1888,6 @@ mod tests {
         let unsupported = [
             "auto_align",
             "auto_reframe",
-            "basic_3d",
             "bokeh_blur",
             "brush_strokes",
             "clip_name",
@@ -1896,7 +1901,6 @@ mod tests {
             "focus_blur",
             "glint",
             "gradient_wipe_legacy",
-            "lens_flare",
             "light_leaks",
             "lighting_effects",
             "lightning",
@@ -1907,7 +1911,6 @@ mod tests {
             "paint_bucket",
             "posterize_time",
             "roughen_edges",
-            "rotate_3d",
             "simple_text",
             "spacer",
             "stroke",
