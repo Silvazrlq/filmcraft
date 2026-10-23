@@ -37,12 +37,66 @@ use args::{Args, parse_value};
 use filmcraft_automation::BridgeClient;
 use filmcraft_engine::Session;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// Set once a write to stdout has failed; later output is dropped.
 static STDOUT_GONE: AtomicBool = AtomicBool::new(false);
 /// Set when stdout failed for a reason other than a closed reader: the exit status becomes 1.
 static STDOUT_ERROR: AtomicBool = AtomicBool::new(false);
+
+/// Exit status after SIGINT / SIGTERM: 128 + the signal number, as a shell reports a killed process.
+const EXIT_INTERRUPT: i32 = 130;
+#[cfg(unix)]
+const EXIT_TERMINATE: i32 = 143;
+/// How long an export gets to stop after it is cancelled, before the CLI exits anyway.
+const CANCEL_GRACE: Duration = Duration::from_secs(10);
+/// How often an export job is polled.
+const POLL: Duration = Duration::from_millis(100);
+
+/// True while `export_job` runs a `file.exportMedia` job; only then a signal cancels instead of exiting.
+static EXPORTING: AtomicBool = AtomicBool::new(false);
+/// Signals received during an export (a second one exits at once).
+static SIGNALS: AtomicU32 = AtomicU32::new(0);
+/// Exit status of the signal that asked the running export to stop; 0 while none did.
+static STOP: AtomicI32 = AtomicI32::new(0);
+
+/// Handles SIGINT / SIGTERM for the whole process. tokio keeps its handler installed after the
+/// stream is dropped, so a signal not read here would be swallowed: with no export running the
+/// process exits at once, as it did before; during an export `STOP` asks the job to be cancelled;
+/// a second signal exits at once.
+async fn listen_for_signals() {
+    #[cfg(unix)]
+    let (mut int, mut term) = match (
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()),
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()),
+    ) {
+        (Ok(int), Ok(term)) => (int, term),
+        _ => return,
+    };
+    loop {
+        #[cfg(unix)]
+        let status = tokio::select! {
+            _ = int.recv() => EXIT_INTERRUPT,
+            _ = term.recv() => EXIT_TERMINATE,
+        };
+        #[cfg(not(unix))]
+        let status = match tokio::signal::ctrl_c().await {
+            Ok(()) => EXIT_INTERRUPT,
+            Err(_) => return,
+        };
+        let n = SIGNALS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n > 1 {
+            diag(format_args!("filmcraft-cli: second signal, exiting now; temporary export files may remain"));
+            std::process::exit(status);
+        }
+        if !EXPORTING.load(Ordering::SeqCst) {
+            diag(format_args!("filmcraft-cli: interrupted"));
+            std::process::exit(status);
+        }
+        STOP.store(status, Ordering::SeqCst);
+    }
+}
 
 fn stdout_gone() -> bool {
     STDOUT_GONE.load(Ordering::Relaxed)
@@ -77,13 +131,15 @@ SUBCOMMANDS
   inspect [project|sequence]    project tree or active sequence as JSON (default: both)
   import <file>...              import media into the project
   export <out> [--preset name] [--format f] [--range r] [--start s --end s] [--settings json]
-         [--gpu-rendering auto|off]
+         [--hardware-export]
          [--scale f] [--quality 0-100] [--no-audio] [--queue] [--allow-offline]
                                 export the active sequence and wait for it to finish: with an
                                 export preset (`export --list-presets`; built-in or the user's), or
                                 a format (h264|hevc|prores|dnxhr|apv|mjpeg|mxf-op1a|mxf-opatom|png|tiff|bmp|gif|wav|aiff|aac, guessed
                                 from the extension); --range entire|inOut|workArea, or a custom
-                                range in seconds; --settings is ExportSettings JSON merged over the
+                                range in seconds; --hardware-export requires AMD GPU rendering and
+                                same-node VA-API and fails if either is unavailable; --settings is
+                                ExportSettings JSON merged over the
                                 preset; --scale renders at a fraction of the frame size (0.5 =
                                 half); --quality 0-100 for the formats that take one; --no-audio
                                 leaves the sound out; --queue adds to the export queue and runs it
@@ -157,6 +213,11 @@ impl Backend {
             return Backend::Bridge(BridgeClient::new(addr).unwrap_or_else(|e| usage(e)));
         }
         let mut s = Session::default();
+        #[cfg(target_os = "linux")]
+        if let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {
+            let (adapter, _, _) = renderer.wgpu_handles();
+            s.amd_export_provider = Some(filmcraft_platform::amd_export_provider(adapter));
+        }
         // user export presets (and other per-user libraries) from the data directory
         if let Some(dir) = a.opt("--data-dir").map(std::path::PathBuf::from).or_else(filmcraft_engine::autosave::default_data_dir) {
             s.export_presets.set_dir(&dir);
@@ -183,6 +244,9 @@ impl Backend {
                     if p.get("wait").and_then(Value::as_bool) != Some(false) {
                         p.insert("wait".into(), json!(true));
                     }
+                }
+                if filmcraft_automation::long_job::is_long(id, &params) {
+                    return export_job(s, params).await;
                 }
                 s.execute(id, params).map_err(|e| e.to_string())
             }
@@ -235,8 +299,8 @@ fn format_for(path: &str) -> Option<&'static str> {
 /// OS hardware video decoders (VideoToolbox on macOS, Media Foundation on Windows) in front of our
 /// own, as in the desktop app. Also what `mcp` and the headless commands decode with.
 /// The GPU export frame renderer (filmcraft-gpu's off-screen compositor behind filmcraft-export's
-/// frame-renderer hook): exports with GPU rendering Auto composite on the GPU and fall back to the
-/// CPU reference renderer wherever it cannot.
+/// frame-renderer hook). GPU Rendering Auto currently fails closed until GPU-resident rendering
+/// reaches the encoder; Off is the explicit CPU reference mode.
 struct GpuFrameRenderer(filmcraft_gpu::ExportRenderer);
 
 impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
@@ -248,7 +312,7 @@ impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
         opts: filmcraft_render::RenderOptions,
         sources: &dyn filmcraft_render::SourceProvider,
     ) -> Option<filmcraft_render::Image> {
-        self.0.render(project, seq, t, opts, sources)
+        self.0.render_cpu_compatible(project, seq, t, opts, sources)
     }
 }
 
@@ -259,7 +323,10 @@ fn register_gpu_frame_renderer() {
 }
 
 fn register_hardware_decoders() -> filmcraft_platform::Availability {
-    filmcraft_platform::register()
+    let hardware = filmcraft_platform::register();
+    // The headless command may export immediately; the GUI reads this probe asynchronously.
+    filmcraft_platform::wait_encoder_probes(std::time::Duration::from_secs(3));
+    hardware
 }
 
 /// `path` made absolute against the working directory, as the project stores it. Unlike
@@ -269,8 +336,103 @@ fn absolute(path: &str) -> String {
     std::path::absolute(path).ok().and_then(|p| p.into_os_string().into_string().ok()).unwrap_or_else(|| path.to_string())
 }
 
+/// A blocking `file.exportMedia` (`export`, `exec`, `run`), run as a job so that SIGINT / SIGTERM can cancel it
+/// (see `cancel_export`). Returns what the command returns with `wait: true`.
+async fn export_job(s: &mut Session, mut params: Value) -> Result<Value, String> {
+    if let Some(p) = params.as_object_mut() {
+        p.insert("wait".into(), json!(false));
+    }
+    EXPORTING.store(true, Ordering::SeqCst);
+    let r = run_export_job(s, params).await;
+    EXPORTING.store(false, Ordering::SeqCst);
+    // a signal that arrived while the export was finishing: the output is complete, but the user asked to stop
+    let late = STOP.load(Ordering::SeqCst);
+    if late != 0 {
+        diag(format_args!("filmcraft-cli: interrupted after the export finished; output kept"));
+        std::process::exit(late);
+    }
+    r
+}
+
+async fn run_export_job(s: &mut Session, params: Value) -> Result<Value, String> {
+    let mut start = s.execute("file.exportMedia", params).map_err(|e| e.to_string())?;
+    let job = start["job"].as_u64().ok_or("export started no job")?;
+    let path = start["path"].as_str().unwrap_or_default().to_string();
+    loop {
+        let stop = STOP.load(Ordering::SeqCst);
+        if stop != 0 {
+            cancel_export(s, job, &path, stop).await;
+        }
+        match job_entry(s, job)? {
+            Some(j) if j["finished"] != true => {}
+            Some(j) => {
+                if let Some(e) = j["result"]["error"].as_str() {
+                    return Err(format!("export failed: {e}"));
+                }
+                if let Some(o) = start.as_object_mut() {
+                    o.remove("poll");
+                    o.remove("cancel");
+                }
+                start["result"] = j["result"].clone();
+                start["offlineMedia"] = j["offlineMedia"].clone();
+                return Ok(start);
+            }
+            None => return Err("export job disappeared".into()),
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+/// The `jobs.list` entry of `job`, if it is still listed.
+fn job_entry(s: &mut Session, job: u64) -> Result<Option<Value>, String> {
+    let jobs = s.execute("jobs.list", json!({})).map_err(|e| e.to_string())?;
+    Ok(jobs.as_array().and_then(|l| l.iter().find(|j| j["id"].as_u64() == Some(job)).cloned()))
+}
+
+/// Cancels the export cooperatively: the encoder stops at its next batch and its writer removes the temporary
+/// output. Waits up to `CANCEL_GRACE` for that, removes this process's remaining temporary files,
+/// then exits with `status`. Published files stay: timestamps cannot prove this job owns them.
+async fn cancel_export(s: &mut Session, job: u64, path: &str, status: i32) -> ! {
+    let _ = s.execute("jobs.cancel", json!({"job": job}));
+    let deadline = Instant::now() + CANCEL_GRACE;
+    let stopped = loop {
+        match job_entry(s, job) {
+            Ok(Some(j)) if j["finished"] != true => {}
+            _ => break true,
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        tokio::time::sleep(POLL).await;
+    };
+    remove_export_temps(path);
+    if stopped {
+        diag(format_args!("filmcraft-cli: export interrupted; temporary output removed, published files kept"));
+    } else {
+        diag(format_args!("filmcraft-cli: export did not stop within 10 s; exiting, temporary output removed, published files kept"));
+    }
+    std::process::exit(status)
+}
+
+/// Removes this process's `.filmcraft-export-<pid>-<n>.tmp` files from the directory of `path`.
+fn remove_export_temps(path: &str) {
+    let dir = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let prefix = format!(".filmcraft-export-{}-", std::process::id());
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        if let Some(n) = name.to_str()
+            && n.starts_with(&prefix)
+            && n.ends_with(".tmp")
+        {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    tokio::spawn(listen_for_signals());
     cli().await;
     if STDOUT_ERROR.load(Ordering::Relaxed) {
         std::process::exit(1);
@@ -449,8 +611,15 @@ async fn cli() {
             if a.flag("--no-audio") {
                 p["audio"] = json!(false);
             }
-            if let Some(v) = a.opt("--gpu-rendering") {
-                p["gpuRendering"] = json!(v); // off | auto (validated by the export command)
+            if a.flag("--hardware-export") {
+                p["hardwareExport"] = json!(true);
+            } else if let Some(v) = a.opt("--gpu-rendering") {
+                let enabled = match v {
+                    "off" => false,
+                    "auto" | "amdRequired" => true,
+                    _ => usage("--gpu-rendering: off | auto | amdRequired"),
+                };
+                p["hardwareExport"] = json!(enabled);
             }
             let mut b = Backend::open(&a);
             let t0 = std::time::Instant::now();
