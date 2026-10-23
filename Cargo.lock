@@ -2119,6 +2119,7 @@ dependencies = [
  "filmcraft-color",
  "filmcraft-dng",
  "filmcraft-frame",
+ "filmcraft-isobmff",
  "filmcraft-testkit",
  "filmcraft-time",
  "image",
