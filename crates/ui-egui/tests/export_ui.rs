@@ -396,6 +396,19 @@ fn queue_panel_send_reorder_cancel_start_retry() {
 }
 
 #[test]
+fn a_finished_export_is_announced_in_the_status_bar() {
+    let mut d = Driver::new("announce");
+    d.ok("ui.set", json!({"mode": "export"}));
+    let loc = d.dir.to_string_lossy().to_string();
+    d.ok("ui.set", json!({"export": {"preset": "Waveform Audio 48 kHz 24-bit", "location": loc, "fileName": "announced", "range": "custom", "customStart": 0.0, "customEnd": 0.5}}));
+    d.frames(2);
+    d.click("export.button");
+    let out = d.path("announced.wav");
+    d.wait_until("the export outcome", |d| d.app().ui.status.starts_with("Exported to"));
+    assert!(d.app().ui.status.contains(&out), "the status names the written file: {}", d.app().ui.status);
+}
+
+#[test]
 fn export_button_and_quick_export_popup() {
     let mut d = Driver::new("quick");
     d.ok("ui.set", json!({"mode": "export"}));

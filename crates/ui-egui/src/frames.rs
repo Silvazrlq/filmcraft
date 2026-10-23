@@ -271,15 +271,54 @@ impl filmcraft_render::SourceProvider for JobProvider {
     }
 }
 
+/// The two strict routes a preview frame can take: decoded source frames uploaded to the GPU, or
+/// GPU-generated demo scenes (no source pixels exist on the CPU).
+pub enum GpuPlanKind {
+    Decoded(filmcraft_render::plan::RequiredFramePlan),
+    Demo(filmcraft_render::plan::ResidentRequiredFramePlan),
+}
+
 /// A strict GPU frame plan materialized off the UI thread.
 pub struct GpuPlan {
-    pub plan: filmcraft_render::plan::RequiredFramePlan,
+    pub plan: GpuPlanKind,
 }
 
 impl GpuPlan {
     /// Bytes source frames keep alive.
     fn bytes(&self) -> usize {
-        self.plan.layers().map(|layer| layer.layer().frame.byte_size()).sum()
+        match &self.plan {
+            GpuPlanKind::Decoded(plan) => plan.layers().map(|layer| layer.layer().frame.byte_size()).sum(),
+            GpuPlanKind::Demo(_) => 0,
+        }
+    }
+
+    /// Composite this plan on the GPU and resolve it for display; nothing is read back.
+    #[allow(clippy::type_complexity)]
+    pub fn composite_display(
+        &self,
+        compositor: &mut filmcraft_gpu::GpuCompositor,
+    ) -> Result<(eframe::wgpu::TextureView, (u32, u32), eframe::wgpu::SubmissionIndex), filmcraft_render::plan::GpuPlanError> {
+        match &self.plan {
+            GpuPlanKind::Decoded(plan) => compositor.composite_required_display(plan),
+            GpuPlanKind::Demo(plan) => compositor.composite_demo_display(plan),
+        }
+    }
+
+    /// Canvas size and the largest side of any uploaded source frame.
+    pub fn extent(&self) -> ((usize, usize), usize) {
+        match &self.plan {
+            GpuPlanKind::Decoded(plan) => {
+                let (width, height) = plan.size();
+                (
+                    (width, height),
+                    plan.layers().map(|layer| layer.layer().frame.width.max(layer.layer().frame.height) as usize).fold(width.max(height), usize::max),
+                )
+            }
+            GpuPlanKind::Demo(plan) => {
+                let (width, height) = plan.size();
+                ((width, height), width.max(height))
+            }
+        }
     }
 }
 
@@ -976,17 +1015,18 @@ fn provider(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>) -> J
     JobProvider { inner: pool.provider(job.project.clone(), services.clone()) }
 }
 
-fn plan_job(
-    job: &Job,
-    seq: ItemId,
-    pool: &Arc<MediaPool>,
-    services: &Arc<dyn Services>,
-) -> Result<(filmcraft_render::plan::RequiredFramePlan, bool), filmcraft_render::plan::GpuPlanError> {
+fn plan_job(job: &Job, seq: ItemId, pool: &Arc<MediaPool>, services: &Arc<dyn Services>) -> Result<(GpuPlanKind, bool), filmcraft_render::plan::GpuPlanError> {
     let opts = filmcraft_render::RenderOptions { scale: job.scale, captions: true, ..Default::default() };
     let provider = provider(job, pool, services);
     let receipt = filmcraft_render::plan::preflight_frame_required(&job.project, seq, job.time, opts)?;
+    // A frame made only of GPU-generated demo scenes has no pixels to decode: it takes the resident route.
+    // Any mix with decoded sources stays on the decoded route, which refuses demo scenes (fail-closed).
+    let requests = receipt.source_requests();
+    if !requests.is_empty() && requests.iter().all(|request| matches!(request.kind, filmcraft_render::plan::ResidentSourceKind::Demo(_))) {
+        return Ok((GpuPlanKind::Demo(filmcraft_render::plan::materialize_frame_required_demo(receipt)?), false));
+    }
     let plan = filmcraft_render::plan::materialize_frame_required(receipt, &provider)?;
-    Ok((plan, false))
+    Ok((GpuPlanKind::Decoded(plan), false))
 }
 
 /// Render a job to RGBA8; the flag says whether it came from a render preview.

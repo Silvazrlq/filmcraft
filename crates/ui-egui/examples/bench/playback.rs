@@ -151,7 +151,7 @@ impl Display {
                 && self.last != Some(k)
             {
                 let before = comp.uploaded_bytes;
-                if let Err(error) = comp.composite_required_display(&plan.plan) {
+                if let Err(error) = plan.composite_display(comp) {
                     eprintln!("bench: strict GPU composite failed: {error:?}");
                 }
                 // Wait for the GPU so the time includes the upload and the draw.

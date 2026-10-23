@@ -677,6 +677,23 @@ pub fn materialize_frame_required(receipt: PreflightedFrame, sources: &dyn Sourc
     Ok(RequiredFramePlan { width: receipt.width, height: receipt.height, steps })
 }
 
+/// Strict plan for a frame whose sources are all GPU-generated demo scenes: nothing is decoded or
+/// read from the CPU, so the metadata is fixed (generated frames are always full-range sRGB).
+pub fn materialize_frame_required_demo(receipt: PreflightedFrame) -> Result<ResidentRequiredFramePlan, GpuPlanError> {
+    let frames: Vec<ResidentFrameMetadata> = receipt
+        .source_requests
+        .iter()
+        .map(|request| ResidentFrameMetadata {
+            id: request.id,
+            item_id: request.item_id,
+            width: request.expected_size.0,
+            height: request.expected_size.1,
+            color: filmcraft_color::ColorInfo::SRGB_FULL,
+        })
+        .collect();
+    materialize_frame_required_resident(receipt, &frames)
+}
+
 /// Materialize a strict resident plan from metadata only. This route never accepts decoded pixels.
 pub fn materialize_frame_required_resident(receipt: PreflightedFrame, frames: &[ResidentFrameMetadata]) -> Result<ResidentRequiredFramePlan, GpuPlanError> {
     if frames.len() != receipt.source_requests.len() {

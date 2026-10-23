@@ -395,6 +395,8 @@ pub struct FilmcraftApp {
     pub cpu_composite_explicit: bool,
     /// Preview render job being watched (job id, where to start playing when it completes).
     watched_render: Option<(u64, Tick)>,
+    /// Finished export jobs whose outcome the status bar already showed.
+    reported_jobs: std::collections::HashSet<u64>,
     /// Settings last applied to the UI (theme, tooltips, frame cache, audio device).
     applied_prefs: Option<filmcraft_engine::autosave::Preferences>,
     applied_transcribing: Option<bool>,
@@ -511,15 +513,13 @@ impl FilmcraftApp {
         {
             return Some((t, g.size));
         }
-        let (width, height) = plan.plan.size();
-        let max_side = plan.plan.layers().map(|layer| layer.layer().frame.width.max(layer.layer().frame.height) as usize).fold(width.max(height), usize::max);
+        let (_, max_side) = plan.extent();
         if max_side > g.max_texture as usize {
             self.ui.status = tl!("GPU preview exceeds the device texture limit").into();
             return None;
         }
         let t0 = web_time::Instant::now();
-        let ran =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.compositor.composite_required_display(&plan.plan).map(|(view, size, _)| (view, size))));
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| plan.composite_display(&mut g.compositor).map(|(view, size, _)| (view, size))));
         let result = match ran {
             Ok(result) => result,
             Err(_) => {
@@ -623,6 +623,7 @@ impl FilmcraftApp {
             gpu: None,
             cpu_composite_explicit: false,
             watched_render: None,
+            reported_jobs: Default::default(),
             applied_prefs: None,
             applied_transcribing: None,
             applied_ui_scale: None,
@@ -1938,6 +1939,23 @@ impl FilmcraftApp {
     fn watch_jobs(&mut self, ctx: &egui::Context) -> Option<filmcraft_engine::Job> {
         use std::sync::atomic::Ordering;
         let running = self.session.jobs.iter().rev().find(|j| !j.progress.finished.load(Ordering::Relaxed)).cloned();
+        // Say how a finished export ended; otherwise a failure, or a file written to the default folder, goes unnoticed.
+        for j in self.session.jobs.iter().rev().take(8) {
+            if j.label.starts_with("Rendering ") || !j.progress.finished.load(Ordering::Relaxed) || self.reported_jobs.contains(&j.id) {
+                continue;
+            }
+            let outcome = j.result.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            match outcome {
+                Some(Ok(report)) => {
+                    let path = report.path;
+                    self.ui.status = tlf!("Exported to {path}", path);
+                }
+                Some(Err(e)) if e == "cancelled" => {}
+                Some(Err(e)) => self.ui.status = e,
+                None => continue,
+            }
+            self.reported_jobs.insert(j.id);
+        }
         // Play after rendering previews.
         if let Some((id, from)) = self.watched_render
             && let Some(j) = self.session.jobs.iter().find(|j| j.id == id)

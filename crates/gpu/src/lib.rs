@@ -1599,6 +1599,15 @@ impl GpuCompositor {
         self.render_plan_checked(&FramePlan::Layers { width, height, layers: Vec::new() }, None, false, true, true)
     }
 
+    /// Resolve a strict resident plan that has no decoded sources (GPU-generated demo scenes only)
+    /// to gamma-encoded RGBA8 for egui. The scenes are generated on the GPU; nothing is read back.
+    pub fn composite_demo_display(&mut self, plan: &ResidentRequiredFramePlan) -> Result<(wgpu::TextureView, (u32, u32), wgpu::SubmissionIndex), GpuPlanError> {
+        let (_, _, encoder) = self.composite_resident_flat(plan, &[])?;
+        self.queue.submit([encoder.finish()]);
+        let (width, height) = plan.size();
+        self.render_plan_checked(&FramePlan::Layers { width, height, layers: Vec::new() }, None, false, true, true)
+    }
+
     fn required_layer_error(mut error: GpuPlanError, layers: &[filmcraft_render::plan::RequiredLayer]) -> GpuPlanError {
         if error.item_id.is_none()
             && let Some(layer) = layers.iter().find(|layer| !layer.evidence().operations().is_empty())
