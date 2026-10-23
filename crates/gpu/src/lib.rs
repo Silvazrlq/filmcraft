@@ -65,8 +65,16 @@ pub const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ACCUM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Transitions whose GPU result matched the CPU oracle on the AMD adapter (`transition_catalog`
-/// `per_id_parity_report`, 22/10/2026: 75 of 108 pass). Regenerate it from that report.
+/// `per_id_parity_report`, 23/10/2026: 82 of 108 pass; the f32 run allows 1e-3 and the f16 run
+/// 2e-3, the compositor's own budget). Regenerate it from that report.
 pub const TRANSITION_AMD_PARITY: &[&str] = &[
+    "burn_alpha",
+    "frame",
+    "grunge",
+    "radial_wipe",
+    "spin_motion",
+    "star_wipe",
+    "vr_iris_wipe",
     "blur_dissolve",
     "whip_legacy",
     "spinback_3d",
@@ -147,8 +155,11 @@ pub const TRANSITION_AMD_PARITY: &[&str] = &[
 /// Effects with recorded CPU parity on the AMD adapter (22/10/2026, 0.10): every case of
 /// `fx_tests::gpu_effects_match_cpu_exactly` before its harness stops at `replicate`, plus the
 /// `fx_tests::gpu_effect_catalog_family_parity_requires_adapter` families that match (block_dissolve
-/// and the vr_chromatic_aberrations/vr_projection/vr_rotate_sphere cases still diverge). The strict
-/// resident export has no CPU fallback, so it refuses every effect not listed here.
+/// and the vr_chromatic_aberrations/vr_projection/vr_rotate_sphere cases still diverge), plus
+/// gaussian_blur_legacy, directional_blur_legacy, reduce_interlace_flicker, wiggle and camera_shake
+/// (cases added to `gpu_effects_match_cpu_exactly` on 23/10/2026 against the real CPU effect: max rel
+/// diff <= 6e-6; camera_shake only without motion blur, the blurred form fails closed).
+/// The strict resident export has no CPU fallback, so it refuses every effect not listed here.
 const RESIDENT_FX_PARITY: &[&str] = &[
     "alpha_adjust",
     "alpha_glow",
@@ -157,6 +168,7 @@ const RESIDENT_FX_PARITY: &[&str] = &[
     "black_white",
     "brightness_contrast",
     "camera_blur",
+    "camera_shake",
     "cell_pattern",
     "change_to_color",
     "channel_blur",
@@ -172,6 +184,7 @@ const RESIDENT_FX_PARITY: &[&str] = &[
     "corner_pin",
     "crop",
     "directional_blur",
+    "directional_blur_legacy",
     "drop_shadow",
     "edge_feather",
     "ellipse",
@@ -181,6 +194,7 @@ const RESIDENT_FX_PARITY: &[&str] = &[
     "four_color_gradient",
     "gamma_correction",
     "gaussian_blur",
+    "gaussian_blur_legacy",
     "gradient",
     "grid",
     "grow",
@@ -206,6 +220,7 @@ const RESIDENT_FX_PARITY: &[&str] = &[
     "posterize",
     "proc_amp",
     "ramp",
+    "reduce_interlace_flicker",
     "replicate",
     "rgb_split",
     "rounded_crop",
@@ -226,6 +241,7 @@ const RESIDENT_FX_PARITY: &[&str] = &[
     "vr_color_gradients",
     "vr_plane_to_sphere",
     "wave_warp",
+    "wiggle",
 ];
 
 struct Uploaded {

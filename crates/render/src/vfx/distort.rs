@@ -328,8 +328,9 @@ pub fn spin(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     place(img, c, Vec2::ZERO, s.max(1e-4), ang);
 }
 
-/// Wiggle: smooth random position / rotation / scale jitter.
-pub fn wiggle(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+/// Offset, scale and rotation (degrees) that Wiggle applies at this time. The CPU effect and the GPU
+/// plan both call it, so the noise is computed once, in one place.
+pub(crate) fn wiggle_place(e: &EffectInstance, cx: &FxCtx) -> (Vec2, f64, f64) {
     let t = cx.seconds * fv(e, "frequency", cx) as f64;
     let seed = fv(e, "seed", cx).max(0.0) as u64;
     let amt = (fv(e, "amount", cx) * cx.px_scale) as f64;
@@ -338,20 +339,25 @@ pub fn wiggle(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let oy = if dims == 1 { 0.0 } else { noise1(t, 1, seed) as f64 * amt * 1.6 };
     let rot = noise1(t, 2, seed) as f64 * fv(e, "rotation", cx) as f64 * 1.6;
     let sc = 1.0 + noise1(t, 3, seed) as f64 * fv(e, "scale", cx) as f64 / 100.0 * 1.6;
-    let c = Vec2::new(img.w as f64 / 2.0, img.h as f64 / 2.0);
-    place(img, c, Vec2::new(ox, oy), sc.max(1e-3), rot);
+    (Vec2::new(ox, oy), sc.max(1e-3), rot)
 }
 
-/// Camera Shake: layered smooth noise on position, rotation and zoom, with optional motion blur.
-pub fn camera_shake(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+/// Wiggle: smooth random position / rotation / scale jitter.
+pub fn wiggle(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let (off, sc, rot) = wiggle_place(e, cx);
+    let c = Vec2::new(img.w as f64 / 2.0, img.h as f64 / 2.0);
+    place(img, c, off, sc, rot);
+}
+
+/// Offset, scale and rotation (degrees) of one Camera Shake sample at time `t` (seconds), shared by
+/// the CPU effect and the GPU plan.
+pub(crate) fn camera_shake_place(e: &EffectInstance, cx: &FxCtx, t: f64) -> (Vec2, f64, f64) {
     let freq = fv(e, "frequency", cx) as f64;
     let seed = fv(e, "seed", cx).max(0.0) as u64;
     let amt = (fv(e, "amount", cx) * cx.px_scale) as f64;
     let rot = fv(e, "rotation", cx) as f64;
     let zoom = fv(e, "zoom", cx) as f64 / 100.0;
     let octaves = fv(e, "complexity", cx).clamp(1.0, 6.0) as usize;
-    let blur = fv(e, "motion_blur", cx) as f64 / 100.0;
-    let fps = cx.env.map_or(30.0, |env| env.frame_rate());
     let shake = |t: f64, ch: u64| -> f64 {
         let (mut s, mut a, mut f, mut norm) = (0.0, 1.0, 1.0, 0.0);
         for o in 0..octaves {
@@ -362,15 +368,21 @@ pub fn camera_shake(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         }
         s / norm * 1.6
     };
+    let off = Vec2::new(shake(t, 0) * amt, shake(t, 1) * amt);
+    // zoom in a little with the shake so edges stay covered
+    (off, 1.0 + zoom * (0.5 + 0.5 * shake(t, 3)), shake(t, 2) * rot)
+}
+
+/// Camera Shake: layered smooth noise on position, rotation and zoom, with optional motion blur.
+pub fn camera_shake(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let blur = fv(e, "motion_blur", cx) as f64 / 100.0;
+    let fps = cx.env.map_or(30.0, |env| env.frame_rate());
     let c = Vec2::new(img.w as f64 / 2.0, img.h as f64 / 2.0);
     let t0 = cx.seconds;
     let n = if blur > 0.0 { 5 } else { 1 };
     motion_blurred(img, n, |im, k| {
-        let t = t0 + k * blur / fps;
-        let off = Vec2::new(shake(t, 0) * amt, shake(t, 1) * amt);
-        // zoom in a little with the shake so edges stay covered
-        let s = 1.0 + zoom * (0.5 + 0.5 * shake(t, 3));
-        place(im, c, off, s, shake(t, 2) * rot);
+        let (off, s, rot) = camera_shake_place(e, cx, t0 + k * blur / fps);
+        place(im, c, off, s, rot);
     });
 }
 

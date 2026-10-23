@@ -256,6 +256,11 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
         ("gaussian_blur", vec![("blurriness", fl(1e9))], false),
         ("gaussian_blur", vec![("blurriness", fl(-50.0))], false),
         ("camera_blur", vec![("percent", fl(20.0))], false),
+        ("gaussian_blur_legacy", vec![("blurriness", fl(5.0))], false),
+        ("gaussian_blur_legacy", vec![("blurriness", fl(12.0)), ("dimensions", ch(2))], false),
+        ("directional_blur_legacy", vec![("length", fl(10.0)), ("direction", fl(30.0))], false),
+        ("reduce_interlace_flicker", vec![("softness", fl(2.0))], false),
+        ("reduce_interlace_flicker", vec![("softness", fl(7.5))], false),
         ("directional_blur", vec![("length", fl(10.0)), ("direction", fl(30.0))], false),
         ("directional_blur", vec![("length", fl(0.2))], false),
         ("directional_blur", vec![("length", fl(1000.0)), ("direction", fl(-100.0))], false),
@@ -485,6 +490,10 @@ fn family_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> 
         ("shrink", &[("from", fl(110.0)), ("to", fl(75.0))]),
         ("move", &[("from", pt(-5.0, 2.0)), ("to", pt(8.0, -4.0))]),
         ("spin", &[("amount", fl(95.0)), ("scale", fl(90.0))]),
+        ("wiggle", &[("amount", fl(30.0)), ("rotation", fl(6.0)), ("scale", fl(12.0)), ("frequency", fl(3.0)), ("seed", fl(7.0))]),
+        ("wiggle", &[("amount", fl(20.0)), ("dimensions", ch(1)), ("seed", fl(3.0))]),
+        ("camera_shake", &[("amount", fl(25.0)), ("rotation", fl(4.0)), ("zoom", fl(8.0)), ("frequency", fl(5.0)), ("complexity", fl(4.0)), ("seed", fl(9.0))]),
+        ("camera_shake", &[]),
         ("bevel_alpha", &[("thickness", fl(2.5)), ("angle", fl(40.0)), ("intensity", fl(65.0))]),
         ("block_dissolve", &[("completion", fl(47.0)), ("block_w", fl(2.3)), ("block_h", fl(1.7)), ("feather", fl(60.0)), ("soft", ParamValue::Bool(true))]),
         ("linear_wipe_legacy", &[("completion", fl(47.0)), ("angle", fl(38.0)), ("feather", fl(2.2))]),
@@ -621,6 +630,9 @@ fn gpu_effects_match_cpu_exactly() {
             id,
             "noise"
                 | "noise_legacy"
+                | "gaussian_blur_legacy"
+                | "directional_blur_legacy"
+                | "reduce_interlace_flicker"
                 | "mosaic"
                 | "mosaic_legacy"
                 | "replicate"
@@ -657,6 +669,8 @@ fn gpu_effects_match_cpu_exactly() {
                 | "shrink"
                 | "move"
                 | "spin"
+                | "wiggle"
+                | "camera_shake"
                 | "bevel_alpha"
                 | "block_dissolve"
                 | "linear_wipe_legacy"
@@ -895,6 +909,8 @@ fn gpu_effect_catalog_family_parity_requires_adapter() {
         "shrink",
         "move",
         "spin",
+        "wiggle",
+        "camera_shake",
         "bevel_alpha",
         "block_dissolve",
         "linear_wipe_legacy",

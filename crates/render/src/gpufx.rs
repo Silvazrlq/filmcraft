@@ -543,6 +543,8 @@ pub const GPU_EFFECTS: &[&str] = &[
     "shrink",
     "move",
     "spin",
+    "wiggle",
+    "camera_shake",
     "bevel_alpha",
     "block_dissolve",
     "linear_wipe_legacy",
@@ -871,7 +873,7 @@ impl FxOp {
             }
             "median" => FxOp::Filter(FilterOp::eval(e, cx, w, h)?),
             "block_dissolve" | "linear_wipe_legacy" => FxOp::LegacyWipe(LegacyWipeOp::eval(e, cx, w, h)?),
-            "grow" | "shrink" | "move" | "spin" | "bevel_alpha" => FxOp::Stylize(StylizeOp::eval(e, cx, w, h)?),
+            "grow" | "shrink" | "move" | "spin" | "wiggle" | "camera_shake" | "bevel_alpha" => FxOp::Stylize(StylizeOp::eval(e, cx, w, h)?),
             "invert" => FxOp::Invert { channel: choice(e, "channel"), blend: f(e, "blend", cx) / 100.0 },
             "posterize" => FxOp::Posterize { n: f(e, "levels", cx).max(2.0) - 1.0 },
             "gaussian_blur" | "gaussian_blur_legacy" => {
@@ -1883,7 +1885,6 @@ mod tests {
             "basic_3d",
             "bokeh_blur",
             "brush_strokes",
-            "camera_shake",
             "clip_name",
             "clone",
             "compound_blur",
@@ -1922,7 +1923,6 @@ mod tests {
             "vr_glow",
             "vr_sharpen",
             "warp_stabilizer",
-            "wiggle",
             "wonder_glow",
             "write_on",
         ];

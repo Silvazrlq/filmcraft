@@ -62,6 +62,18 @@ impl StylizeOp {
                 let off = from + (to - from) * p;
                 transform(filmcraft_geom::Vec2::new(w as f64 / 2.0, h as f64 / 2.0), off, 1.0, 0.0)
             }
+            "wiggle" => {
+                let (off, scale, angle) = crate::vfx::wiggle_place(e, cx);
+                transform(filmcraft_geom::Vec2::new(w as f64 / 2.0, h as f64 / 2.0), off, scale, angle)
+            }
+            "camera_shake" => {
+                // The motion-blurred form averages five placements, which has no single-pass GPU op.
+                if crate::vfx::fv(e, "motion_blur", cx) > 0.0 {
+                    return None;
+                }
+                let (off, scale, angle) = crate::vfx::camera_shake_place(e, cx, cx.seconds);
+                transform(filmcraft_geom::Vec2::new(w as f64 / 2.0, h as f64 / 2.0), off, scale, angle)
+            }
             "bevel_alpha" => Some(Self::BevelAlpha {
                 thickness: crate::vfx::fv(e, "thickness", cx) * cx.px_scale,
                 lx: crate::vfx::fv(e, "angle", cx).to_radians().cos(),
@@ -90,7 +102,7 @@ impl StylizeOp {
 
     pub fn matches_id(&self, id: &str) -> bool {
         match self {
-            Self::Place { .. } => matches!(id, "grow" | "shrink" | "move" | "spin"),
+            Self::Place { .. } => matches!(id, "grow" | "shrink" | "move" | "spin" | "wiggle" | "camera_shake"),
             Self::BevelAlpha { .. } => id == "bevel_alpha",
         }
     }
@@ -213,7 +225,7 @@ mod tests {
 
     #[test]
     fn implemented_stylize_ops_match_cpu_oracle() {
-        for id in ["grow", "shrink", "move", "spin"] {
+        for id in ["grow", "shrink", "move", "spin", "wiggle", "camera_shake"] {
             let Some(def) = find_effect(id) else { panic!("missing registered effect {id}") };
             let mut effect = def.instance();
             match id {
