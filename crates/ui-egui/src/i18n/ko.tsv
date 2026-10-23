@@ -3606,3 +3606,16 @@
 	Export via CPU (manual)	CPU로 내보내기 (수동)
 	Off: GPU export (AMD GPU + same-node VA-API required; fails if unavailable). On: CPU reference renderer.	끄기: GPU 내보내기(AMD GPU와 동일 노드의 VA-API 필요, 사용할 수 없으면 실패). 켜기: CPU 참조 렌더러.
 	This format exports only via CPU	이 형식은 CPU로만 내보냅니다
+	Based on FilmCraft by the ArtCraft team. Modified local build.	ArtCraft 팀의 FilmCraft 기반. 로컬에서 수정된 빌드.
+	CPU compositing explicitly enabled	CPU 합성이 명시적으로 활성화됨
+	Export preview unavailable in GPU-only mode; CPU fallback is disabled	GPU 전용 모드에서는 내보내기 미리 보기를 사용할 수 없음; CPU 대체가 비활성화됨
+	GPU channel display is unsupported; CPU fallback is disabled	GPU 채널 표시는 지원되지 않음; CPU 대체가 비활성화됨
+	GPU compositor failed to initialise; preview unavailable	GPU 컴포지터를 초기화하지 못함; 미리 보기를 사용할 수 없음
+	GPU preview compositor panicked; CPU fallback is disabled	GPU 미리 보기 컴포지터가 패닉됨; CPU 대체가 비활성화됨
+	GPU preview exceeds the device texture limit	GPU 미리 보기가 장치의 텍스처 한도를 초과함
+	GPU preview failed; CPU fallback is disabled	GPU 미리 보기 실패; CPU 대체가 비활성화됨
+	GPU preview unavailable; CPU fallback is disabled	GPU 미리 보기를 사용할 수 없음; CPU 대체가 비활성화됨
+	Reference Monitor unavailable in GPU-only preview; CPU fallback is disabled	GPU 전용 미리 보기에서 참조 모니터를 사용할 수 없음; CPU 대체가 비활성화됨
+	Reference view unavailable in GPU-only preview; CPU fallback is disabled	GPU 전용 미리 보기에서 참조 보기를 사용할 수 없음; CPU 대체가 비활성화됨
+	Scopes unavailable in GPU-only preview; CPU fallback is disabled	GPU 전용 미리 보기에서 스코프를 사용할 수 없음; CPU 대체가 비활성화됨
+	no supported AMD GPU adapter; preview unavailable	지원되는 AMD GPU 어댑터가 없음; 미리 보기를 사용할 수 없음
