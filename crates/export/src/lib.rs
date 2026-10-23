@@ -976,6 +976,10 @@ pub struct ExportSettings {
     /// writing `path` (hosts without a filesystem: the web app offers the file as a download).
     #[serde(skip)]
     pub sink: Option<OutputSink>,
+    /// An already-created primary output file. Internal callers use this to retain an exclusive
+    /// reservation made while choosing an output name, rather than reopening that path later.
+    #[serde(skip)]
+    pub output_file: Option<Arc<std::fs::File>>,
 }
 
 /// Receives in-memory export output: `(path, bytes)` per finished file.
@@ -996,7 +1000,7 @@ enum AudioWriter {
 
 /// An export's output file: on disk, or in memory for an [`OutputSink`].
 enum Out {
-    File { writer: std::io::BufWriter<std::fs::File>, temp: TempOutput },
+    File { writer: std::io::BufWriter<std::fs::File>, temp: Option<TempOutput> },
     Mem(std::io::Cursor<Vec<u8>>),
 }
 
@@ -1015,6 +1019,10 @@ static NEXT_OUTPUT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 impl Out {
     fn create(settings: &ExportSettings) -> Result<Out> {
+        if let Some(file) = &settings.output_file {
+            let file = file.try_clone().map_err(|e| ExportError::Io(e.to_string()))?;
+            return Ok(Out::File { writer: std::io::BufWriter::new(file), temp: None });
+        }
         Out::create_path(settings, &settings.path)
     }
 
@@ -1023,13 +1031,19 @@ impl Out {
         if settings.sink.is_some() {
             return Ok(Out::Mem(std::io::Cursor::new(Vec::new())));
         }
+        if path == settings.path
+            && let Some(file) = &settings.output_file
+        {
+            let file = file.try_clone().map_err(|e| ExportError::Io(e.to_string()))?;
+            return Ok(Out::File { writer: std::io::BufWriter::new(file), temp: None });
+        }
         let destination = std::path::PathBuf::from(path);
         let dir = destination.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
         for _ in 0..32 {
             let id = NEXT_OUTPUT_TEMP.fetch_add(1, Ordering::Relaxed);
             let temp = dir.join(format!(".filmcraft-export-{}-{id}.tmp", std::process::id()));
             match std::fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
-                Ok(file) => return Ok(Out::File { writer: std::io::BufWriter::new(file), temp: TempOutput { path: temp, destination } }),
+                Ok(file) => return Ok(Out::File { writer: std::io::BufWriter::new(file), temp: Some(TempOutput { path: temp, destination }) }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(ExportError::Io(format!("{path}: {e}"))),
             }
@@ -1045,8 +1059,13 @@ impl Out {
     fn finish_path(self, settings: &ExportSettings, path: &str) -> Result<u64> {
         match self {
             Out::File { mut writer, temp } => {
-                let io = |e| ExportError::Io(format!("{}: {e}", temp.destination.display()));
+                let name = temp.as_ref().map_or_else(|| path.to_owned(), |t| t.destination.display().to_string());
+                let io = |e| ExportError::Io(format!("{name}: {e}"));
                 writer.flush().map_err(io)?;
+                let Some(temp) = temp else {
+                    // a handle the caller opened: it is theirs to sync and keep
+                    return Ok(writer.get_ref().metadata().map_err(io)?.len());
+                };
                 writer.get_ref().sync_all().map_err(io)?;
                 let size = writer.get_ref().metadata().map_err(io)?.len();
                 drop(writer);
@@ -1186,6 +1205,7 @@ impl Default for ExportSettings {
             h264_pass: H264Pass::Single,
             signal: ColorSignal::default(),
             sink: None,
+            output_file: None,
         }
     }
 }

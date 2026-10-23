@@ -4,6 +4,7 @@
 //! These stage probes do not prove a complete exported movie. Missing hardware support fails.
 #![cfg(target_os = "linux")]
 
+#[path = "it/common/mod.rs"]
 mod common;
 
 use std::time::Duration;

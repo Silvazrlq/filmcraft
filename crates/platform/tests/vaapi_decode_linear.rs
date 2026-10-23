@@ -1,6 +1,7 @@
 //! Ignored physical probe for exact-node H.264 decode into a single-object NV12 LINEAR VA surface.
 #![cfg(target_os = "linux")]
 
+#[path = "it/common/mod.rs"]
 mod common;
 
 use filmcraft_codecs::hw::NalStreamInfo;
