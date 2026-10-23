@@ -39,6 +39,111 @@ fn words(s: &mut Session) -> Vec<String> {
     r["words"].as_array().unwrap().iter().map(|w| w["text"].as_str().unwrap().to_string()).collect()
 }
 
+fn finish_transcription(s: &mut Session) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        s.poll_persistence();
+        if s.transcript_jobs.is_empty() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "transcription did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn background_transcription_applies_once_and_undo_restores() {
+    let (mut s, item, _) = session();
+    let result = s.execute("transcript.generate", json!({"items":[item.0],"background":true})).unwrap();
+    assert!(result["job"].is_u64());
+    assert!(s.project.transcripts.is_empty());
+    finish_transcription(&mut s);
+    assert_eq!(s.project.transcripts[&item].words.len(), 6);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.project.transcripts.is_empty());
+}
+
+#[test]
+fn background_cancel_preserves_project_and_refuses_second_job() {
+    let (mut s, item, _) = session();
+    let result = s.execute("transcript.generate", json!({"items":[item.0],"background":true})).unwrap();
+    assert!(s.execute("transcript.generate", json!({"items":[item.0],"background":true})).is_err());
+    let job = s.jobs.iter().find(|job| job.id == result["job"].as_u64().unwrap()).unwrap();
+    job.progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    finish_transcription(&mut s);
+    assert!(s.project.transcripts.is_empty());
+}
+
+#[test]
+fn voice_preprocessing_preserves_speaker_labelling_setting() {
+    struct StereoRecognizer;
+    impl filmcraft_speech::Transcriber for StereoRecognizer {
+        fn id(&self) -> String {
+            "stereo-test".into()
+        }
+        fn input_sample_rate(&self) -> u32 {
+            48_000
+        }
+        fn transcribe(
+            &self,
+            _: &[f32],
+            _: &filmcraft_speech::Options,
+            _: filmcraft_speech::ProgressFn,
+        ) -> std::result::Result<Transcript, filmcraft_speech::SpeechError> {
+            Ok(Transcript {
+                language: "pt".into(),
+                words: vec![Word::new("Olá", Tick::from_seconds_f64(0.2), Tick::from_seconds_f64(0.5))],
+                ..Default::default()
+            })
+        }
+    }
+    let (mut s, item, _) = session();
+    s.transcriber = Some(Arc::new(StereoRecognizer));
+    s.execute("transcript.generate", json!({"items":[item.0],"diarize":true})).unwrap();
+    assert_eq!(s.project.transcripts[&item].speakers.len(), 1);
+    assert_eq!(s.project.transcripts[&item].words[0].speaker, Some(0));
+}
+
+#[test]
+fn background_voice_preprocessing_honors_speaker_labelling_setting() {
+    struct StereoRecognizer;
+    impl filmcraft_speech::Transcriber for StereoRecognizer {
+        fn id(&self) -> String {
+            "stereo-test".into()
+        }
+        fn input_sample_rate(&self) -> u32 {
+            48_000
+        }
+        fn transcribe(
+            &self,
+            _: &[f32],
+            _: &filmcraft_speech::Options,
+            _: filmcraft_speech::ProgressFn,
+        ) -> std::result::Result<Transcript, filmcraft_speech::SpeechError> {
+            Ok(Transcript {
+                language: "pt".into(),
+                words: vec![Word::new("Olá", Tick::from_seconds_f64(0.2), Tick::from_seconds_f64(0.5))],
+                ..Default::default()
+            })
+        }
+    }
+    let run = |diarize| {
+        let (mut s, item, _) = session();
+        s.transcriber = Some(Arc::new(StereoRecognizer));
+        s.execute("transcript.generate", json!({"items":[item.0],"background":true,"diarize":diarize,"maxSpeakers":1})).unwrap();
+        finish_transcription(&mut s);
+        s.project.transcripts[&item].as_ref().clone()
+    };
+
+    let labelled = run(true);
+    assert_eq!(labelled.speakers.len(), 1);
+    assert_eq!(labelled.words[0].speaker, Some(0));
+
+    let unlabelled = run(false);
+    assert!(unlabelled.speakers.is_empty());
+    assert_eq!(unlabelled.words[0].speaker, None);
+}
+
 #[test]
 fn generate_inspect_search_and_rename() {
     let (mut s, item, start) = session();

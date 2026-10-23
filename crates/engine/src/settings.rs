@@ -968,6 +968,16 @@ const LANGUAGES: &[(&str, &str)] = &[
     ("ru", "Russian"),
     ("hi", "Hindi"),
 ];
+#[cfg(target_os = "linux")]
+const MODELS: &[(&str, &str)] = &[
+    ("whisper-tiny", "Whisper tiny (fastest)"),
+    ("whisper-base", "Whisper base (balanced)"),
+    ("whisper-small", "Whisper small (most accurate)"),
+    ("whisper-large-v3", "Whisper large-v3 (GPU + vocal isolation)"),
+    ("whisper-large-v3-turbo", "Whisper large-v3 Turbo (multilingual, 809 M, faster)"),
+    ("whisper-large-v3-q5_0", "Whisper large-v3 Q5_0 (multilingual, 1.08 GB)"),
+];
+#[cfg(not(target_os = "linux"))]
 const MODELS: &[(&str, &str)] =
     &[("whisper-tiny", "Whisper tiny (fastest)"), ("whisper-base", "Whisper base (balanced)"), ("whisper-small", "Whisper small (most accurate)")];
 const CACHE_MGMT: &[(&str, &str)] = &[
@@ -985,6 +995,10 @@ pub const DURATION_UNITS: &[(&str, &str)] = &[("frames", "Frames"), ("seconds", 
 /// stub).
 pub fn categories() -> &'static [Category] {
     CATEGORIES
+}
+
+pub fn model_choices() -> Vec<(&'static str, &'static str)> {
+    filmcraft_speech::models::settings_choices()
 }
 
 pub fn category(id: &str) -> Option<&'static Category> {
@@ -1390,6 +1404,13 @@ pub fn field(key: &str) -> Option<Field> {
 
 /// Check a value for `key` against the schema (choices, colours). Ranges are clamped later.
 pub fn validate(key: &str, v: &Value) -> std::result::Result<(), String> {
+    if key == "mediaAnalysis.whisperModel" {
+        let id = v.as_str().ok_or("speech model must be a string")?;
+        if filmcraft_speech::models::find(id).is_none() {
+            return Err(format!("unknown speech model `{id}`"));
+        }
+        return Ok(());
+    }
     if key == "appearance.favoriteThemes" {
         let items = v.as_array().ok_or("favorite themes must be a list")?;
         let mut seen = Vec::new();

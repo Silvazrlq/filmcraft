@@ -411,6 +411,8 @@ pub struct Session {
     pub state: EditorState,
     pub media: Arc<MediaPool>,
     pub services: Arc<dyn Services>,
+    /// Host capability provider bound to this session renderer.
+    pub amd_export_provider: Option<Arc<dyn filmcraft_export::AmdExportProvider>>,
     pub events: Vec<Event>,
     /// Commands executed (for macros/debugging): (id, params).
     pub journal: Vec<(String, Value)>,
@@ -451,6 +453,8 @@ pub struct Session {
     pub mask_jobs: Vec<masks::PendingTrack>,
     /// Scene Edit Detection jobs whose results are applied when they finish.
     pub scene_jobs: Vec<scene_detect::PendingScene>,
+    /// Transcription jobs whose results are applied when they finish.
+    pub(crate) transcript_jobs: Vec<transcript::PendingTranscription>,
     /// Effect presets (built-in + the user's, persisted in the data directory).
     pub presets: presets::PresetLibrary,
     /// Export presets (built-in + the user's, persisted in the data directory) and favourites.
@@ -519,6 +523,11 @@ impl Default for Session {
 }
 
 impl Session {
+    /// Whether a background transcription is still running or awaiting result application.
+    pub fn is_transcribing(&self) -> bool {
+        !self.transcript_jobs.is_empty()
+    }
+
     pub fn new(services: Arc<dyn Services>) -> Self {
         Self {
             project: Arc::new(Project::new("Untitled")),
@@ -535,6 +544,7 @@ impl Session {
             },
             media: Arc::new(MediaPool::default()),
             services,
+            amd_export_provider: None,
             events: Vec::new(),
             journal: Vec::new(),
             jobs: Vec::new(),
@@ -555,6 +565,7 @@ impl Session {
             media_jobs: Vec::new(),
             mask_jobs: Vec::new(),
             scene_jobs: Vec::new(),
+            transcript_jobs: Vec::new(),
             presets: Default::default(),
             export_presets: Default::default(),
             export_queue: Default::default(),
@@ -650,6 +661,7 @@ impl Session {
         proxies::poll(self);
         masks::poll(self);
         scene_detect::poll(self);
+        transcript::poll(self);
         export_tools::pump_queue(self, false);
         panels::log_jobs(self);
         let Some(p) = self.persistence.as_mut() else { return };
