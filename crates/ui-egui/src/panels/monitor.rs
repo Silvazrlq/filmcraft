@@ -187,9 +187,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         };
         let size_key = (scale * 1000.0) as u32;
         let channel = display.is_channel();
-        let use_gpu = which == Which::Program && app.gpu.is_some() && !channel && !crate::panels::menu_dialogs::software_renderer(app);
+        let gpu_preview = which == Which::Program && !crate::panels::menu_dialogs::software_renderer(app);
+        let gpu_available = app.gpu.as_ref().is_some_and(|gpu| !gpu.broken.load(std::sync::atomic::Ordering::Relaxed));
         let cpu_target = target;
-        let target = match (use_gpu, target) {
+        let target = match (gpu_preview, target) {
             (true, Target::Sequence(s)) => Target::SequencePlan(s),
             (_, t) => t,
         };
@@ -197,7 +198,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         let draft = crate::frames::draft_playback(playing, scale, app.session.prefs.playback.draft_decode);
         let key = FrameKey { target, frame, size: size_key, revision: rev, draft };
         let project = app.session.project.clone();
-        if playing {
+        let mut gpu_notice: Option<String> = None;
+        if gpu_preview && !gpu_available {
+            gpu_notice = Some(tl!("GPU preview unavailable; CPU fallback is disabled").into());
+            if which == Which::Program && app.playback.preroll.is_some() {
+                app.playback.preroll_ready = true;
+            }
+        } else if playing {
             let preroll = which == Which::Program && app.playback.preroll.is_some();
             let speed = if which == Which::Program { app.playback.speed } else { app.source_playback.clock.speed };
             app.frames.schedule_playback(key, rate, scale, &project, speed, preroll);
@@ -209,16 +216,36 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         }
         let asked = asked_before(app, prefix, key, playing);
         let tex_name = if channel { format!("monitor-{prefix}-{display:?}") } else { format!("monitor-{prefix}") };
-        let (shown, on_screen) = if use_gpu {
-            let found = app
-                .frames
-                .get_plan(&key)
-                .map(|p| (key, p))
-                .or_else(|| app.frames.nearest_plan(key, 6))
-                .or_else(|| asked.iter().find_map(|k| app.frames.get_plan(k).map(|p| (*k, p))));
-            match found {
-                Some((k, plan)) => (app.gpu_present(k, &plan).map(|(id, _)| id), Some(k)),
-                None => (app.gpu.as_ref().and_then(|g| g.texture), app.gpu.as_ref().and_then(|g| g.last_key)),
+        let (shown, on_screen) = if gpu_preview {
+            if !gpu_available {
+                (None, None)
+            } else if channel {
+                gpu_notice = Some(tl!("GPU channel display is unsupported; CPU fallback is disabled").into());
+                (None, None)
+            } else {
+                match app.frames.get_plan(&key) {
+                    Some(plan) => {
+                        let old_status = app.ui.status.clone();
+                        match app.gpu_present(key, &plan) {
+                            Some((id, _)) => (Some(id), Some(key)),
+                            None => {
+                                if app.ui.status != old_status {
+                                    gpu_notice = Some(app.ui.status.clone());
+                                    app.ui.status = old_status;
+                                }
+                                (None, None)
+                            }
+                        }
+                    }
+                    None => {
+                        if let Some(error) = app.frames.plan_error(&key) {
+                            gpu_notice = Some(error);
+                        } else if app.gpu.is_none() {
+                            gpu_notice = Some(tl!("GPU preview unavailable; CPU fallback is disabled").into());
+                        }
+                        (None, None)
+                    }
+                }
             }
         } else {
             cpu_texture(app, &ctx, &tex_name, key, &asked, display)
@@ -240,16 +267,27 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         }
         if let Some(tex) = shown {
             ui.painter().image(tex, pic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        } else if let Some(notice) = gpu_notice {
+            ui.painter().text(pic.center(), Align2::CENTER_CENTER, notice, Tokens::ui(12.0), t.text_dim);
         }
         if let Some(ra) = ref_area {
-            // the reference frame (CPU path)
-            let rf = rate.frame_at(Tick(mv.compare_ref.unwrap_or(time.0)));
-            let rkey = FrameKey { target: cpu_target, frame: rf, size: size_key, revision: rev, draft: false };
-            app.frames.request(rkey, rate.tick_of(rf), scale, &project, 1);
             let rpic = fit(ra, display_w, frame_size.1 as f32);
             ui.painter().rect_filled(rpic, 0.0, t.monitor_bg);
-            if let (Some(tex), _) = cpu_texture(app, &ctx, &format!("monitor-{prefix}-ref"), rkey, &[], DisplayMode::Composite) {
-                ui.painter().image(tex, rpic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            if gpu_preview {
+                ui.painter().text(
+                    rpic.center(),
+                    Align2::CENTER_CENTER,
+                    tl!("Reference view unavailable in GPU-only preview; CPU fallback is disabled"),
+                    Tokens::ui(12.0),
+                    t.text_dim,
+                );
+            } else {
+                let rf = rate.frame_at(Tick(mv.compare_ref.unwrap_or(time.0)));
+                let rkey = FrameKey { target: cpu_target, frame: rf, size: size_key, revision: rev, draft: false };
+                app.frames.request(rkey, rate.tick_of(rf), scale, &project, 1);
+                if let (Some(tex), _) = cpu_texture(app, &ctx, &format!("monitor-{prefix}-ref"), rkey, &[], DisplayMode::Composite) {
+                    ui.painter().image(tex, rpic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
             }
             app.auto.add("program.compare.reference", rpic, "reference frame");
             let bar = Rect::from_min_max(pos2(ra.min.x, ra.max.y + 2.0), pos2(video_area.max.x, ra.max.y + 22.0));

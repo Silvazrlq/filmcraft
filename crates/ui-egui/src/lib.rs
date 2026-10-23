@@ -270,6 +270,7 @@ const SCREENSHOT_TIMEOUT_S: f64 = 10.0;
 /// How long `ui.screenshot` waits for the UI to settle (monitors showing their exact frames, the
 /// timeline zoom animation finished) before capturing what is there.
 const SCREENSHOT_SETTLE_MAX_S: f64 = 5.0;
+const TRANSCRIPTION_CACHE_BUDGET: usize = 64 << 20;
 
 /// Export entries that run from the menus through the save panel: command, filter label,
 /// extension.
@@ -390,10 +391,13 @@ pub struct FilmcraftApp {
     pub(crate) stale_clipboard_media: Option<String>,
     /// GPU compositor (when running on wgpu): device state + compositor + the egui texture it feeds.
     pub gpu: Option<GpuState>,
+    /// Explicit CPU compositing opt-in from host flag or project renderer setting.
+    pub cpu_composite_explicit: bool,
     /// Preview render job being watched (job id, where to start playing when it completes).
     watched_render: Option<(u64, Tick)>,
     /// Settings last applied to the UI (theme, tooltips, frame cache, audio device).
     applied_prefs: Option<filmcraft_engine::autosave::Preferences>,
+    applied_transcribing: Option<bool>,
     /// Settings ▸ Appearance ▸ UI Scale last applied, with the system scale it was applied for.
     applied_ui_scale: Option<(Option<f32>, f32)>,
     workspace_restored: bool,
@@ -411,16 +415,10 @@ pub struct GpuState {
     pub size: (u32, u32),
     /// Composite time of the last frame (ms).
     pub last_ms: f32,
-    /// Set by the device's uncaptured-error handler: the GPU path failed (validation, lost
-    /// device, out of memory). The app then drops it and composites on the CPU.
+    /// Set by the device's uncaptured-error handler: GPU preview failed and must fail closed.
     pub broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Largest texture side the device accepts.
     pub max_texture: u32,
-}
-
-/// Largest texture side a plan needs on the GPU (output and every layer).
-fn plan_side(plan: &filmcraft_render::plan::FramePlan) -> usize {
-    plan.max_side()
 }
 
 /// A software rasterizer (llvmpipe, SwiftShader, softpipe — VMs and containers without GPU device
@@ -440,12 +438,17 @@ fn rasterizer_reason(name: &str, device_type: eframe::wgpu::DeviceType) -> Optio
 }
 
 /// Whether the GPU compositor can run on this adapter: it renders and blends Rgba16Float
-/// targets and uploads whole frames as textures. Older or OpenGL-backed GPUs (some Intel Macs,
-/// VMs, Linux without Vulkan, WebGL) can't; those use the CPU compositor, which renders the same
-/// frames. Returns the reason when unsupported.
+/// targets and uploads whole frames as textures. Returns reason when unsupported.
 pub fn gpu_compositor_unsupported(adapter: &eframe::wgpu::Adapter) -> Option<String> {
     use eframe::wgpu::{TextureFormat, TextureFormatFeatureFlags as F, TextureUsages as U};
-    if let Some(why) = software_rasterizer(&adapter.get_info()) {
+    let info = adapter.get_info();
+    if info.vendor != 0x1002 {
+        return Some(format!("AMD adapter required; selected vendor is 0x{:04x}", info.vendor));
+    }
+    if !matches!(info.device_type, eframe::wgpu::DeviceType::IntegratedGpu | eframe::wgpu::DeviceType::DiscreteGpu) {
+        return Some(format!("physical AMD GPU required; selected device type is {:?}", info.device_type));
+    }
+    if let Some(why) = software_rasterizer(&info) {
         return Some(why);
     }
     let f = adapter.get_texture_format_features(TextureFormat::Rgba16Float);
@@ -466,19 +469,15 @@ impl FilmcraftApp {
     /// Enable the GPU compositor on the eframe wgpu device.
     pub fn set_wgpu(&mut self, rs: eframe::egui_wgpu::RenderState) {
         if let Some(why) = gpu_compositor_unsupported(&rs.adapter) {
-            log::warn!("GPU compositor disabled ({why}); compositing on the CPU");
-            // Say so instead of letting the preview quietly crawl: "GPU 0 %, CPU 100 %" with no
-            // explanation read like a renderer bug when the machine simply has no GPU access.
-            self.ui.status = format!("{} ({why})", tl!("GPU acceleration is unavailable; preview renders on the CPU"));
+            log::warn!("GPU compositor unavailable ({why}); CPU fallback disabled");
+            self.ui.status = format!("{} ({why})", tl!("GPU preview unavailable; CPU fallback is disabled"));
             return;
         }
-        // wgpu's default reaction to a validation error or lost device is to panic, which closed
-        // the app (or left the monitors blank) on GPUs the compositor doesn't suit. Log instead and
-        // fall back to the CPU compositor.
+        // wgpu's default reaction to a validation error or lost device can panic; record it and fail closed.
         let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = broken.clone();
         rs.device.on_uncaptured_error(std::sync::Arc::new(move |e: eframe::wgpu::Error| {
-            log::error!("GPU error, switching to the CPU compositor: {e}");
+            log::error!("GPU preview failed: {e}");
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }));
         let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| filmcraft_gpu::GpuCompositor::new(&rs.device, &rs.queue)));
@@ -487,25 +486,23 @@ impl FilmcraftApp {
                 let max_texture = rs.device.limits().max_texture_dimension_2d;
                 self.gpu = Some(GpuState { render_state: rs, compositor, texture: None, last_key: None, size: (0, 0), last_ms: 0.0, broken, max_texture });
             }
-            _ => log::error!("GPU compositor failed to initialise; compositing on the CPU"),
+            _ => {
+                self.ui.status = tl!("GPU compositor failed to initialise; preview unavailable").into();
+                log::error!("GPU compositor failed to initialise; preview unavailable");
+            }
         }
     }
 
-    /// Drop the GPU compositor after a GPU error; the monitors composite on the CPU from then on.
-    fn disable_gpu(&mut self, why: &str) {
-        log::error!("GPU compositor disabled: {why}");
-        if let Some(g) = self.gpu.take()
-            && let Some(id) = g.texture
-        {
-            g.render_state.renderer.write().free_texture(&id);
-        }
-        self.ui.status = tl!("Graphics problem: switched to software compositing").into();
+    /// Select CPU compositing only when the host explicitly requests it.
+    pub fn enable_cpu_composite(&mut self) {
+        self.cpu_composite_explicit = true;
+        self.ui.status = tl!("CPU compositing explicitly enabled").into();
     }
 
     /// Composite a plan on the GPU and return the egui texture showing it.
     pub fn gpu_present(&mut self, key: FrameKey, plan: &frames::GpuPlan) -> Option<(egui::TextureId, (u32, u32))> {
         if self.gpu.as_ref()?.broken.load(std::sync::atomic::Ordering::Relaxed) {
-            self.disable_gpu("device error");
+            self.ui.status = tl!("GPU preview failed; CPU fallback is disabled").into();
             return None;
         }
         let g = self.gpu.as_mut()?;
@@ -514,18 +511,28 @@ impl FilmcraftApp {
         {
             return Some((t, g.size));
         }
-        if plan_side(&plan.plan) > g.max_texture as usize {
-            self.disable_gpu("frame larger than the GPU's maximum texture size");
+        let (width, height) = plan.plan.size();
+        let max_side = plan.plan.layers().map(|layer| layer.layer().frame.width.max(layer.layer().frame.height) as usize).fold(width.max(height), usize::max);
+        if max_side > g.max_texture as usize {
+            self.ui.status = tl!("GPU preview exceeds the device texture limit").into();
             return None;
         }
         let t0 = web_time::Instant::now();
-        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let (view, size) = g.compositor.composite_prepared(&plan.plan, Some(&plan.prepared));
-            (view.clone(), size)
-        }));
-        let Ok((view, size)) = ran else {
-            self.disable_gpu("compositor panicked");
-            return None;
+        let ran =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.compositor.composite_required_display(&plan.plan).map(|(view, size, _)| (view, size))));
+        let result = match ran {
+            Ok(result) => result,
+            Err(_) => {
+                self.ui.status = tl!("GPU preview compositor panicked; CPU fallback is disabled").into();
+                return None;
+            }
+        };
+        let (view, size) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.ui.status = error.to_string();
+                return None;
+            }
         };
         let g = self.gpu.as_mut()?;
         g.last_ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -614,8 +621,10 @@ impl FilmcraftApp {
             v_down: false,
             stale_clipboard_media: None,
             gpu: None,
+            cpu_composite_explicit: false,
             watched_render: None,
             applied_prefs: None,
+            applied_transcribing: None,
             applied_ui_scale: None,
             workspace_restored: false,
             workspaces,
@@ -653,6 +662,7 @@ impl FilmcraftApp {
             self.tl.reset_media_caches();
             // the new frame server needs the Memory settings
             self.applied_prefs = None;
+            self.applied_transcribing = None;
         }
     }
 
@@ -724,15 +734,20 @@ impl FilmcraftApp {
                 self.set_theme(ctx, k);
             }
         }
+        let p = self.session.prefs.clone();
+        let transcribing = self.session.is_transcribing();
         // checked every frame: a theme or font change installs the style again
-        let animation = if self.session.prefs.appearance.animations { theme::ANIMATION_TIME } else { 0.0 };
+        let animation = if p.appearance.animations { theme::ANIMATION_TIME } else { 0.0 };
         if ctx.global_style().animation_time != animation {
             ctx.global_style_mut(|s| s.animation_time = animation);
         }
-        if self.applied_prefs.as_ref() == Some(&self.session.prefs) {
+        if self.applied_prefs.as_ref() == Some(&p) {
+            if self.applied_transcribing != Some(transcribing) {
+                self.apply_memory_cache_budgets(&p, transcribing);
+                self.applied_transcribing = Some(transcribing);
+            }
             return;
         }
-        let p = self.session.prefs.clone();
         let prev = self.applied_prefs.take();
         if prev.as_ref().is_none_or(|q| q.appearance != p.appearance || q.general.show_tool_tips != p.general.show_tool_tips) {
             let k = self.appearance_kind(ctx);
@@ -760,7 +775,6 @@ impl FilmcraftApp {
             }
             i18n::set_current(self.ui.language);
         }
-        self.frames.set_cache_budget(p.memory.frame_cache_mb as usize * (1 << 20));
         self.ui.play_after_render = p.timeline.play_after_rendering;
         let hardware_changed = prev.as_ref().is_none_or(|q| q.audio_hardware != p.audio_hardware);
         let pitch_changed = prev.as_ref().is_some_and(|q| q.audio.maintain_pitch_shuttling != p.audio.maintain_pitch_shuttling);
@@ -791,7 +805,15 @@ impl FilmcraftApp {
                 self.set_workspace(&w);
             }
         }
+        self.apply_memory_cache_budgets(&p, transcribing);
+        self.applied_transcribing = Some(transcribing);
         self.applied_prefs = Some(p);
+    }
+
+    fn apply_memory_cache_budgets(&self, prefs: &filmcraft_engine::autosave::Preferences, transcribing: bool) {
+        let image_budget = (prefs.memory.frame_cache_mb as usize).saturating_mul(1 << 20);
+        self.frames.set_cache_budget(if transcribing { image_budget.min(TRANSCRIPTION_CACHE_BUDGET) } else { image_budget });
+        self.frames.set_plan_cache_budget(if transcribing { TRANSCRIPTION_CACHE_BUDGET } else { frames::DEFAULT_PLAN_CACHE_BUDGET });
     }
 
     /// Every sequence has its own Timeline view (zoom, scroll, track heights), as Premiere's
@@ -2460,7 +2482,6 @@ mod mac_ctrl_click_tests {
 
 #[cfg(test)]
 mod gpu_fallback_tests {
-    use filmcraft_render::plan::{FramePlan, PlanLayer};
 
     /// Software rasterizers must not be treated as a GPU compositor: the preview crawled while
     /// "GPU" usage read 0 % because wgpu had silently fallen back to llvmpipe.
@@ -2474,26 +2495,6 @@ mod gpu_fallback_tests {
         assert!(r("softpipe", D::Cpu).is_some());
         assert!(r("AMD Radeon RX 5700 XT", D::DiscreteGpu).is_none());
         assert!(r("Apple M3 Pro", D::IntegratedGpu).is_none());
-    }
-
-    #[test]
-    fn plan_side_covers_output_and_every_layer() {
-        let frame = |w: u32, h: u32| std::sync::Arc::new(filmcraft_frame::VideoFrame::rgba_f32(w, h, vec![0.0; (w * h * 4) as usize]));
-        let layer = |w, h| PlanLayer {
-            frame: frame(w, h),
-            matrix: filmcraft_geom::Affine::IDENTITY,
-            opacity: 1.0,
-            blend: filmcraft_render::Blend::Normal,
-            fx: None,
-            input: None,
-        };
-        // a 4K source in an HD sequence still needs a 3840-wide texture on the GPU
-        let p = FramePlan::Layers { width: 1920, height: 1080, layers: vec![layer(64, 64), layer(3840, 2160)] };
-        assert_eq!(super::plan_side(&p), 3840);
-        let p = FramePlan::Layers { width: 1920, height: 1080, layers: vec![] };
-        assert_eq!(super::plan_side(&p), 1920);
-        let p = FramePlan::Image(filmcraft_render::Image::new(800, 4000));
-        assert_eq!(super::plan_side(&p), 4000);
     }
 }
 
@@ -2970,5 +2971,77 @@ mod native_menu_tests {
         app.sync_native_menu();
         assert_eq!(last(&sent, "edit.undo"), Some(false));
         assert_eq!(last(&sent, "edit.redo"), Some(true), "the undone edit can be redone");
+    }
+}
+
+#[cfg(test)]
+mod transcription_memory_tests {
+    use super::*;
+    use filmcraft_project::{Transcript, Word};
+    use filmcraft_speech::{Options, SpeechError, Transcriber};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::SyncSender;
+
+    struct GatedTranscriber {
+        entered: SyncSender<()>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl Transcriber for GatedTranscriber {
+        fn id(&self) -> String {
+            "memory-test".into()
+        }
+        fn transcribe(&self, _: &[f32], _: &Options, progress: filmcraft_speech::ProgressFn) -> Result<Transcript, SpeechError> {
+            if !progress(0.5, "Waiting") {
+                return Err(SpeechError::Cancelled);
+            }
+            let _ = self.entered.send(());
+            while !self.release.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(Transcript { language: "en".into(), words: vec![Word::new("hello", Tick::ZERO, Tick::from_seconds_f64(0.2))], ..Default::default() })
+        }
+    }
+
+    struct ReleaseOnDrop(Arc<AtomicBool>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn transcription_temporarily_reduces_and_restores_ui_cache_budgets() {
+        let mut session = Session::default();
+        session.execute("file.openDemoProject", json!({})).unwrap();
+        let item = session.active_sequence().unwrap().audio_tracks[0].items[0].item;
+        let (entered, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let release = Arc::new(AtomicBool::new(false));
+        let _release_on_drop = ReleaseOnDrop(release.clone());
+        session.transcriber = Some(Arc::new(GatedTranscriber { entered, release: release.clone() }));
+        session.execute("transcript.generate", json!({"item":item.0,"background":true,"diarize":false})).unwrap();
+
+        let mut app = FilmcraftApp::new(session);
+        let image_pref = app.session.prefs.memory.frame_cache_mb;
+        entered_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        app.apply_prefs(&egui::Context::default());
+        assert!(app.session.is_transcribing());
+        assert_eq!(app.session.prefs.memory.frame_cache_mb, image_pref);
+        assert_eq!(app.frames.cache_usage().1, 64 << 20);
+        assert_eq!(app.frames.plan_cache_budget(), 64 << 20);
+
+        release.store(true, Ordering::Relaxed);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.session.is_transcribing() {
+            app.session.poll_persistence();
+            assert!(std::time::Instant::now() < deadline, "transcription did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.apply_prefs(&egui::Context::default());
+        assert_eq!(app.session.prefs.memory.frame_cache_mb, image_pref);
+        assert_eq!(app.frames.cache_usage().1, image_pref as usize * (1 << 20));
+        assert_eq!(app.frames.plan_cache_budget(), 1 << 30);
     }
 }

@@ -528,6 +528,13 @@ fn draw_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, f: &Fi
                 }
                 Kind::Choice(opts) => {
                     field_label(ui, f.label);
+                    let catalogue_opts;
+                    let opts = if f.key == "mediaAnalysis.whisperModel" {
+                        catalogue_opts = settings::model_choices();
+                        catalogue_opts.as_slice()
+                    } else {
+                        opts
+                    };
                     if let Some(v) = combo(app, ui, f.key, &choice_text(&cur), &static_opts(opts), 300.0) {
                         let x = if cur.is_number() { v.parse::<u64>().map(Value::from).unwrap_or(json!(v)) } else { json!(v) };
                         put(&mut d.values, f.key, x);

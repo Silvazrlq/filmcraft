@@ -344,6 +344,7 @@
 	Tools	Outils
 	Top	Haut
 	Transcribe Sequence…	Transcrire la séquence…
+	Transcribe again	Transcrire à nouveau
 	Transcribe…	Transcrire…
 	Transcript	Transcription
 	Transparent Video…	Vidéo transparente…
@@ -3546,7 +3547,6 @@
 	Gradient Angle	Angle du dégradé
 	Linear Gradient	Dégradé linéaire
 	Solid	Uni
-	GPU Rendering	Rendu GPU
 	Composite on the GPU when available	Composer sur le GPU si disponible
 	Text to Speech	Synthèse vocale
 	Edit Narration	Modifier la narration
@@ -3584,3 +3584,6 @@
 	Open a sequence to search its graphics	Ouvrez une séquence pour rechercher dans ses graphiques
 	No text graphics in this sequence. Add text with the Type tool.	Aucun graphique avec du texte dans cette séquence. Ajoutez du texte avec l'outil Texte.
 	No matching text.	Aucun texte ne correspond.
+	Export via CPU (manual)	Exporter via le CPU (manuel)
+	Off: GPU export (AMD GPU + same-node VA-API required; fails if unavailable). On: CPU reference renderer.	Désactivé : export via le GPU (GPU AMD et VA-API sur le même nœud requis ; échec si indisponibles). Activé : moteur de rendu de référence sur CPU.
+	This format exports only via CPU	Ce format est exporté uniquement via le CPU
