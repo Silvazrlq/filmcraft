@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use filmcraft_frame::{PixelData, VideoFrame, pool};
 use filmcraft_geom::{Affine, Vec2};
-use filmcraft_media::{FrameRequest, SharedSource};
+use filmcraft_media::{CompressedVideoSource, FrameRequest, MediaError, SharedSource};
 use filmcraft_project::{ItemId, ItemKind, ParamValue, Project, Sequence, TrackItem};
 use filmcraft_time::{Tick, TimeDisplay, format_time};
 
@@ -48,6 +48,11 @@ pub use image::Image;
 /// Resolves project items to media sources (the engine owns the media pool).
 pub trait SourceProvider: Sync {
     fn source(&self, item: ItemId) -> Option<SharedSource>;
+
+    /// Open authorized full-resolution compressed input for resident export.
+    fn compressed_source(&self, _item: ItemId) -> Result<Arc<dyn CompressedVideoSource>, MediaError> {
+        Err(MediaError::Unsupported("compressed video source is unavailable".into()))
+    }
 }
 
 impl<F: Fn(ItemId) -> Option<SharedSource> + Sync> SourceProvider for F {

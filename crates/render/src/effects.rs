@@ -146,7 +146,7 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                         continue;
                     }
                     let n0 = hash3(x, y, frame) - 0.5;
-                    let ns = if colored { [n0, hash3(x, y, frame + 7777) - 0.5, hash3(x, y, frame + 99_991) - 0.5] } else { [n0; 3] };
+                    let ns = if colored { [n0, hash3(x, y, frame.wrapping_add(7777)) - 0.5, hash3(x, y, frame.wrapping_add(99_991)) - 0.5] } else { [n0; 3] };
                     let c = enc([p[0] / a, p[1] / a, p[2] / a]);
                     let mut o = [c[0] + ns[0] * amt, c[1] + ns[1] * amt, c[2] + ns[2] * amt];
                     if clip {
@@ -806,7 +806,7 @@ pub fn gaussian(img: &mut Image, sigma_x: f32, sigma_y: f32, repeat_edge: bool) 
 }
 
 /// The box radii [`gaussian`] runs on a `w`×`h` image, per axis (empty: that axis is untouched).
-pub(crate) fn gaussian_boxes(w: usize, h: usize, sigma_x: f32, sigma_y: f32) -> (Vec<u32>, Vec<u32>) {
+pub fn gaussian_boxes(w: usize, h: usize, sigma_x: f32, sigma_y: f32) -> (Vec<u32>, Vec<u32>) {
     // beyond a few image sizes every radius gives the same (flat) result; cap to keep box sizes sane
     let sigma_x = if sigma_x.is_finite() { sigma_x.min(w.max(8) as f32 * 2.0) } else { 0.0 };
     let sigma_y = if sigma_y.is_finite() { sigma_y.min(h.max(8) as f32 * 2.0) } else { 0.0 };
@@ -1612,5 +1612,83 @@ mod lumetri_cpu_parity_tests {
 
         let oval = render(-100.0);
         assert!(red(&oval, 79, 20) > red(&ellipse, 79, 20), "negative values widen the oval");
+    }
+}
+
+#[cfg(test)]
+mod noise_seed_overflow_tests {
+    use super::*;
+    use filmcraft_project::{ParamValue, find_effect};
+    use filmcraft_time::Tick;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn context(t: Tick) -> FxCtx<'static> {
+        FxCtx {
+            t,
+            px_scale: 1.0,
+            seconds: 0.0,
+            timecode: "",
+            clip_name: "noise-overflow-test",
+            project: None,
+            env: None,
+            frame_rate: 24.0,
+            working: filmcraft_color::WorkingSpace::Rec709,
+        }
+    }
+
+    fn source() -> Image {
+        Image { w: 2, h: 2, px: vec![0.15, 0.1, 0.2, 0.5, 0.0, 0.0, 0.0, 0.0, 0.08, 0.2, 0.05, 0.8, 0.3, 0.12, 0.09, 0.4] }
+    }
+
+    fn render(id: &str, use_vfx: bool, t: Tick) -> Image {
+        let mut effect = find_effect(id).unwrap_or_else(|| panic!("missing {id}")).instance();
+        for (key, value) in
+            [("amount", ParamValue::Float(100.0)), ("color", ParamValue::Bool(true)), ("clip", ParamValue::Bool(false)), ("grain_size", ParamValue::Float(1.0))]
+        {
+            if let Some(param) = effect.params.get_mut(key) {
+                param.value = value;
+            }
+        }
+        let mut image = source();
+        let cx = context(t);
+        if use_vfx {
+            crate::vfx::apply(&mut image, &effect, &cx);
+        } else {
+            apply(&mut image, &effect, &cx);
+        }
+        image
+    }
+
+    fn release_semantics(t: Tick) -> Image {
+        let mut image = source();
+        let frame = noise_frame_seed(&context(t));
+        for y in 0..image.h {
+            for x in 0..image.w {
+                let i = (y * image.w + x) * 4;
+                let a = image.px[i + 3];
+                if a <= 0.0 {
+                    continue;
+                }
+                let ns = [hash3(x, y, frame) - 0.5, hash3(x, y, frame.wrapping_add(7777)) - 0.5, hash3(x, y, frame.wrapping_add(99_991)) - 0.5];
+                let c = enc([image.px[i] / a, image.px[i + 1] / a, image.px[i + 2] / a]);
+                let out = dec([c[0] + ns[0], c[1] + ns[1], c[2] + ns[2]]);
+                image.px[i..i + 3].copy_from_slice(&[out[0] * a, out[1] * a, out[2] * a]);
+            }
+        }
+        image
+    }
+
+    #[test]
+    fn negative_tick_noise_wraps_channel_offsets_without_panicking() {
+        for t in [Tick(-7), Tick(-1)] {
+            let expected = release_semantics(t);
+            for (id, use_vfx) in [("noise", false), ("noise", true), ("noise_legacy", true)] {
+                let first = catch_unwind(AssertUnwindSafe(|| render(id, use_vfx, t))).unwrap_or_else(|_| panic!("{id} panicked at {t:?}"));
+                let second = catch_unwind(AssertUnwindSafe(|| render(id, use_vfx, t))).unwrap_or_else(|_| panic!("{id} repeated run panicked at {t:?}"));
+                assert_eq!(first.px, second.px, "{id} output must be deterministic at {t:?}");
+                assert!(first.px.iter().all(|v| v.is_finite()), "{id} output must remain finite at {t:?}");
+                assert_eq!(first.px, expected.px, "{id} must preserve release wrapping semantics at {t:?}");
+            }
+        }
     }
 }
