@@ -2180,12 +2180,15 @@ dependencies = [
 name = "filmcraft-platform"
 version = "0.12.0"
 dependencies = [
+ "ash",
  "filmcraft-bitstream",
  "filmcraft-codecs",
  "filmcraft-color",
  "filmcraft-export",
  "filmcraft-frame",
+ "filmcraft-gpu",
  "filmcraft-h264",
+ "filmcraft-h264enc",
  "filmcraft-hevc",
  "filmcraft-isobmff",
  "filmcraft-media",
@@ -2199,6 +2202,9 @@ dependencies = [
  "objc2-core-media",
  "objc2-core-video",
  "objc2-video-toolbox",
+ "pollster 0.4.0",
+ "wgpu",
+ "wgpu-hal",
  "windows 0.62.2",
 ]
 
