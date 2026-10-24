@@ -1925,7 +1925,7 @@ impl FilmcraftApp {
         let running = self.session.jobs.iter().rev().find(|j| !j.progress.finished.load(Ordering::Relaxed)).cloned();
         // Say how a finished export ended; otherwise a failure, or a file written to the default folder, goes unnoticed.
         for j in self.session.jobs.iter().rev().take(8) {
-            if j.label.starts_with("Rendering ") || !j.progress.finished.load(Ordering::Relaxed) || self.reported_jobs.contains(&j.id) {
+            if !self.session.export_offline.contains_key(&j.id) || !j.progress.finished.load(Ordering::Relaxed) || self.reported_jobs.contains(&j.id) {
                 continue;
             }
             let outcome = j.result.lock().unwrap_or_else(|e| e.into_inner()).clone();
