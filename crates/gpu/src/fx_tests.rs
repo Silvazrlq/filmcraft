@@ -903,6 +903,43 @@ fn roughen_edges_probe_localises_apply_on_adapter() {
     assert!(first.is_none(), "roughen apply: first divergence {}", first.unwrap_or_default());
 }
 
+/// Hash probe: the GPU's 64-bit cell hash of cells (x, y, 0) against `hash_u` on the CPU, for every texel.
+/// Prints the first differing cell. A mismatch here means the gradient index differs, which flips signs.
+#[test]
+fn roughen_hash_probe_matches_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_hash_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_hash_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("hash probe route");
+    let mut first: Option<String> = None;
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let i = (y * w as usize + x) * 4;
+            let part = |k: usize| gpu[i + k] as u64;
+            let hi = (part(0) | (part(1) << 16)) as u32;
+            let lo = (part(2) | (part(3) << 16)) as u32;
+            let got = (u64::from(hi) << 32) | u64::from(lo);
+            let want = filmcraft_render::gpufx_roughen::hash_cell_reference(x as i64, y as i64, 0, params.seed);
+            if got != want && first.is_none() {
+                first = Some(format!("cell ({x},{y},0): gpu {got:#018x} cpu {want:#018x}"));
+            }
+        }
+    }
+    eprintln!("hash probe: first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
+    assert!(first.is_none(), "cell hash: first divergence {}", first.unwrap_or_default());
+}
+
 /// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {

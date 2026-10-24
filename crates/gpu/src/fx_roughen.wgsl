@@ -244,3 +244,16 @@ fn cs_roughen_probe(@builtin(global_invocation_id) id: vec3<u32>) {
     let n = fbm(cu, cv, pf(8u), pf(7u), U64(pword(13u), pword(12u)));
     textureStore(output, texel, vec4<f32>(n, d, cu, cv));
 }
+
+// Measurement probe (not a route): the 64-bit cell hash of cell (x, y, 0) at each texel, split into four
+// 16-bit parts (exact in f32): r = hi low, g = hi high, b = lo low, a = lo high. Same bindings as the apply.
+@compute @workgroup_size(8, 8, 1)
+fn cs_roughen_hash_probe(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(output);
+    if (id.x >= size.x || id.y >= size.y) {
+        return;
+    }
+    let texel = vec2<i32>(id.xy);
+    let h = hash_u64(u64_of_i32(texel.x), u64_of_i32(texel.y), u64_of_i32(0), U64(pword(13u), pword(12u)));
+    textureStore(output, texel, vec4<f32>(f32(h.hi & 0xffffu), f32(h.hi >> 16u), f32(h.lo & 0xffffu), f32(h.lo >> 16u)));
+}
