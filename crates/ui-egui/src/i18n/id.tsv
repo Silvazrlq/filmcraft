@@ -3597,3 +3597,8 @@
 	Reference view unavailable in GPU-only preview; CPU fallback is disabled	Tampilan referensi tidak tersedia di pratinjau khusus GPU; fallback CPU dinonaktifkan
 	Scopes unavailable in GPU-only preview; CPU fallback is disabled	Scopes tidak tersedia di pratinjau khusus GPU; fallback CPU dinonaktifkan
 	no supported AMD GPU adapter; preview unavailable	Tidak ada adapter GPU AMD yang didukung; pratinjau tidak tersedia
+	Enter renders: CPU	Enter merender: CPU
+	Enter renders: GPU	Enter merender: GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	Pilih apakah Enter merender efek dan transisi di CPU atau GPU. Jalur GPU belum tersedia dan gagal tanpa merender.
+	Saving preferences failed	Gagal menyimpan preferensi
+	Enter render backend	Backend render Enter

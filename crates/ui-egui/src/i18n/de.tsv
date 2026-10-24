@@ -3628,3 +3628,8 @@
 	Reference view unavailable in GPU-only preview; CPU fallback is disabled	Referenzansicht im reinen GPU-Vorschaumodus nicht verfügbar; CPU-Ausweichlösung ist deaktiviert
 	Scopes unavailable in GPU-only preview; CPU fallback is disabled	Scopes im reinen GPU-Vorschaumodus nicht verfügbar; CPU-Ausweichlösung ist deaktiviert
 	no supported AMD GPU adapter; preview unavailable	Kein unterstützter AMD-GPU-Adapter; Vorschau nicht verfügbar
+	Enter renders: CPU	Enter rendert: CPU
+	Enter renders: GPU	Enter rendert: GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	Wählen, ob Enter Effekte und Übergänge auf der CPU oder der GPU rendert. Der GPU-Weg ist noch nicht verfügbar und schlägt ohne Rendering fehl.
+	Saving preferences failed	Speichern der Einstellungen fehlgeschlagen
+	Enter render backend	Render-Backend für Enter

@@ -3634,3 +3634,8 @@
 	Whisper large-v3 (GPU + vocal isolation)	Whisper large-v3（GPU + ボーカル分離）
 	Whisper large-v3 Q5_0 (multilingual, 1.08 GB)	Whisper large-v3 Q5_0（多言語、1.08 GB）
 	Whisper large-v3 Turbo (multilingual, 809 M, faster)	Whisper large-v3 Turbo（多言語、809 M、高速）
+	Enter renders: CPU	Enterでレンダリング: CPU
+	Enter renders: GPU	Enterでレンダリング: GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	Enterキーで効果とトランジションを CPU と GPU のどちらでレンダリングするか選択します。GPU の経路はまだ利用できず、レンダリングせずに失敗します。
+	Saving preferences failed	環境設定の保存に失敗しました
+	Enter render backend	Enter 時のレンダリングバックエンド

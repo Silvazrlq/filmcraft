@@ -3618,3 +3618,8 @@
 	Reference view unavailable in GPU-only preview; CPU fallback is disabled	GPU 전용 미리 보기에서 참조 보기를 사용할 수 없음; CPU 대체가 비활성화됨
 	Scopes unavailable in GPU-only preview; CPU fallback is disabled	GPU 전용 미리 보기에서 스코프를 사용할 수 없음; CPU 대체가 비활성화됨
 	no supported AMD GPU adapter; preview unavailable	지원되는 AMD GPU 어댑터가 없음; 미리 보기를 사용할 수 없음
+	Enter renders: CPU	Enter 렌더링: CPU
+	Enter renders: GPU	Enter 렌더링: GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	Enter 키로 효과와 트랜지션을 CPU 또는 GPU에서 렌더링할지 선택합니다. GPU 경로는 아직 사용할 수 없으며 렌더링 없이 실패합니다.
+	Saving preferences failed	환경설정 저장 실패
+	Enter render backend	Enter 렌더링 백엔드
