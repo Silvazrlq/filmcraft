@@ -145,6 +145,7 @@ pub fn slot_bytes(width: u32, height: u32) -> Option<u64> {
 }
 
 /// One effect's multi-pass route. Built from the effect instance at evaluation time.
+#[derive(Clone, Debug, PartialEq)]
 pub struct MultipassEffect {
     pub id: &'static str,
     /// WGSL module with one compute entry point per name in `kernels`. Same binding contract as crates/gpu/src/fx_multipass.wgsl.
@@ -229,6 +230,52 @@ pub fn multipass_effect_for(id: &str, width: u32, height: u32) -> Option<Multipa
         }
         _ => None,
     }
+}
+
+/// Production route for `e` on a `width` x `height` frame, with the parameters the instance holds.
+/// None means the CPU renders the effect (a no-op value, a frame the plan cannot take, or a route
+/// that is not registered). Never a silent fallback after a GPU failure: the caller decides.
+pub fn multipass_route(e: &filmcraft_project::EffectInstance, cx: &crate::effects::FxCtx, width: u32, height: u32) -> Option<MultipassEffect> {
+    match e.effect.as_str() {
+        "vr_blur" | "vr_sharpen" | "vr_denoise" => vr_route_for(e, cx, width, height),
+        "roughen_edges" => crate::gpufx_roughen::roughen_effect(e, cx, width, height),
+        "spacer" => crate::gpufx_spacer::spacer_effect(e, cx, width, height),
+        _ => None,
+    }
+}
+
+/// VR route with the instance's parameters, evaluated as `vfx::immersive::apply` does. The same
+/// numbers feed the CPU reference, so the two agree by construction. None on a no-op value.
+fn vr_route_for(e: &filmcraft_project::EffectInstance, cx: &crate::effects::FxCtx, width: u32, height: u32) -> Option<MultipassEffect> {
+    use crate::vfx::{VR_KERNEL_COL, VR_KERNEL_COPY, VR_KERNEL_DENOISE, VR_KERNEL_ROW, VR_KERNEL_SHARPEN, VrKind, bv, chv, fv, vr_plan};
+    const VR_KERNELS: &[&str] = &[VR_KERNEL_ROW, VR_KERNEL_COL, VR_KERNEL_COPY, VR_KERNEL_SHARPEN, VR_KERNEL_DENOISE];
+    const VR_WGSL: &str = include_str!("../../gpu/src/vr.wgsl");
+    let px = cx.px_scale;
+    let kind = match e.effect.as_str() {
+        "vr_blur" => {
+            let sigma = fv(e, "blurriness", cx) * px * 0.5;
+            // vr_blur_image returns early at sigma <= 0.3: nothing to route
+            (sigma > 0.3).then_some(VrKind::Blur { sigma })?
+        }
+        "vr_sharpen" => {
+            let amount = fv(e, "amount", cx) / 100.0;
+            (amount > 0.0).then_some(VrKind::Sharpen { sigma: px.max(0.35) * 1.2, amount })?
+        }
+        "vr_denoise" => {
+            let level = fv(e, "amount", cx) / 100.0;
+            if level <= 0.0 {
+                return None;
+            }
+            let slow = chv(e, "noise_type") == 1;
+            let sigma = level * if slow { 3.0 } else { 1.8 } * px.max(0.35);
+            VrKind::Denoise { sigma, threshold: 0.02 + level * 0.12, show: bv(e, "show_noise") }
+        }
+        _ => return None,
+    };
+    let layout = chv(e, "frame_layout");
+    let plan = vr_plan(kind, layout, usize::try_from(width).ok()?, usize::try_from(height).ok()?)?;
+    let id = MULTIPASS_ROUTES.iter().copied().find(|r| *r == e.effect.as_str())?;
+    Some(MultipassEffect { id, wgsl: VR_WGSL, kernels: VR_KERNELS, plan })
 }
 
 /// Routes that have a plan, kernel and CPU parity case. The classifier in gpufx.rs still refuses
@@ -365,6 +412,38 @@ mod tests {
         let p = plan(vec![pass("k", &[0], 1)], 1);
         // 8K UHD is far above any fixed cap; the device, not this crate, decides
         assert_eq!(p.intermediate_bytes(7680, 4320), Ok(7680 * 4320 * 16));
+    }
+
+    fn instance_with(id: &str, key: &str, value: f32) -> filmcraft_project::EffectInstance {
+        let mut e = filmcraft_project::find_effect(id).expect("registered effect").instance();
+        e.params.get_mut(key).expect("param").value = filmcraft_project::ParamValue::Float(f64::from(value));
+        e
+    }
+
+    #[test]
+    fn production_vr_route_reads_the_instance_parameters() {
+        use crate::vfx::{VR_KERNEL_DENOISE, VR_KERNEL_SHARPEN, VrKind, vr_plan};
+        let cx = multipass_cx();
+        // the parity case's values, read from the instance this time
+        let blur = multipass_route(&instance_with("vr_blur", "blurriness", 4.0), &cx, 67, 41).expect("blur route");
+        assert_eq!(blur.plan, vr_plan(VrKind::Blur { sigma: 2.0 }, 0, 67, 41).expect("plan"));
+        let sharpen = multipass_route(&instance_with("vr_sharpen", "amount", 60.0), &cx, 67, 41).expect("sharpen route");
+        assert_eq!(sharpen.plan, vr_plan(VrKind::Sharpen { sigma: 1.2, amount: 0.6 }, 0, 67, 41).expect("plan"));
+        assert!(sharpen.kernels.contains(&VR_KERNEL_SHARPEN));
+        let denoise = multipass_route(&instance_with("vr_denoise", "amount", 50.0), &cx, 67, 41).expect("denoise route");
+        assert_eq!(denoise.plan, vr_plan(VrKind::Denoise { sigma: 0.9, threshold: 0.08, show: false }, 0, 67, 41).expect("plan"));
+        assert!(denoise.kernels.contains(&VR_KERNEL_DENOISE));
+    }
+
+    #[test]
+    fn production_vr_route_refuses_no_op_values_and_unknown_ids() {
+        let cx = multipass_cx();
+        assert!(multipass_route(&instance_with("vr_sharpen", "amount", 0.0), &cx, 67, 41).is_none());
+        assert!(multipass_route(&instance_with("vr_denoise", "amount", 0.0), &cx, 67, 41).is_none());
+        assert!(multipass_route(&instance_with("vr_blur", "blurriness", 0.0), &cx, 67, 41).is_none());
+        assert!(multipass_route(&instance_with("vr_blur", "blurriness", 4.0), &cx, 0, 41).is_none());
+        let plain = filmcraft_project::find_effect("grid").expect("grid").instance();
+        assert!(multipass_route(&plain, &cx, 67, 41).is_none());
     }
 
     #[test]
