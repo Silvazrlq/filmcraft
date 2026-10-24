@@ -114,6 +114,7 @@ impl MultipassRunner {
 
     /// Records every pass of `plan` into `encoder` and returns the view of the result slot.
     /// The caller submits the encoder. `source` must be an Rgba32Float view of `size`.
+    /// An `Err` can leave passes already recorded: the caller must discard that encoder, never submit it.
     pub(crate) fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -123,6 +124,12 @@ impl MultipassRunner {
         size: (u32, u32),
     ) -> Result<wgpu::TextureView, MultipassGpuError> {
         if size.0 == 0 || size.1 == 0 {
+            return Err(MultipassGpuError::SizeMismatch);
+        }
+        let limits = device.limits();
+        let max_dim = limits.max_texture_dimension_2d;
+        let max_groups = limits.max_compute_workgroups_per_dimension;
+        if size.0 > max_dim || size.1 > max_dim || size.0.div_ceil(WORKGROUP) > max_groups || size.1.div_ceil(WORKGROUP) > max_groups {
             return Err(MultipassGpuError::SizeMismatch);
         }
         plan.intermediate_bytes(size.0, size.1).map_err(MultipassGpuError::Plan)?;
@@ -162,7 +169,7 @@ impl MultipassRunner {
         for pass in &plan.passes {
             let pipeline = self.kernels.iter().find(|(name, _)| *name == pass.kernel).map(|(_, p)| p).ok_or(MultipassGpuError::UnknownKernel(pass.kernel))?;
             let input = |i: usize| -> Result<&wgpu::TextureView, MultipassGpuError> {
-                // The first input stands in for a missing second one, so no texture is bound twice.
+                // A kernel that reads one input gets it on both bindings; validation guarantees at least one.
                 let slot = pass.inputs.get(i).or(pass.inputs.first()).copied().unwrap_or(Slot::SOURCE);
                 self.view(slot, source)
             };
@@ -234,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_a_bad_plan_without_touching_the_device() {
+    fn refuses_a_bad_plan_before_recording_any_pass() {
         let Some((device, _)) = adapter_device() else {
             eprintln!("no GPU adapter; skipping");
             return;
