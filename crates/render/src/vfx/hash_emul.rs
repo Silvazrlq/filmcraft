@@ -199,6 +199,32 @@ mod tests {
         sum / norm.max(1e-6)
     }
 
+    /// Pair `noise3` against the CPU `noise3` on every signed axis combination, fractional offsets and
+    /// large cells (still inside i32, where the shader's clamp is inactive). Bit-exact: same operations.
+    #[test]
+    fn noise3_pair_matches_cpu_on_signed_and_large_cells() {
+        let cells = [-2i64, -1, 0, 1, 2, 1_999_999_000, -1_999_999_000];
+        let fracs = [0.0f32, 0.25, 0.5, 0.875];
+        for seed in [0u64, 42, u64::MAX] {
+            for &cx in &cells {
+                for &cy in &cells {
+                    for &cz in &cells {
+                        for &fx in &fracs {
+                            for &fy in &fracs {
+                                for &fz in &fracs {
+                                    let (x, y, z) = (cx as f32 + fx, cy as f32 + fy, cz as f32 + fz);
+                                    let cpu = crate::vfx::noise3(x, y, z, seed);
+                                    let gpu = noise3_pair(x, y, z, U64::from_u64(seed));
+                                    assert_eq!(gpu.to_bits(), cpu.to_bits(), "x={x} y={y} z={z} seed={seed}: cpu {cpu} gpu {gpu}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn kernel_noise_semantics_match_cpu_fbm() {
         let mut r = Rng(0x0BAD_5EED_1234_0001);
@@ -206,7 +232,8 @@ mod tests {
         for i in 0..200_000u32 {
             let x = (r.next() % 4000) as f32 / 7.0 - 300.0;
             let y = (r.next() % 4000) as f32 / 7.0 - 300.0;
-            let z = (r.next() % 1000) as f32 / 1000.0;
+            // z spans negative values too: the GPU cell index must sign-extend for every axis.
+            let z = (r.next() % 4000) as f32 / 1000.0 - 2.0;
             let oct = 1.0 + (r.next() % 900) as f32 / 100.0;
             let seed = r.next() % 1000;
             let cpu = crate::vfx::fbm(x, y, z, oct, seed);
