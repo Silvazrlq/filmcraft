@@ -1007,6 +1007,51 @@ fn roughen_octave_probe_matches_cpu_on_adapter() {
     assert!(first.is_none(), "octave probe: first divergence {}", first.unwrap_or_default());
 }
 
+/// Hash probe over x and z in {-1, 0, 1, 2}: every texel's cell hash against `hash_u` on the CPU, printed
+/// as a table of (x, z) classes with GPU and CPU parts. Shows whether the fault depends on z, x, or the sign.
+#[test]
+fn roughen_hash_z_probe_matches_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{hash_cell_reference, roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_hash_z_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_hash_z_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("hash z probe route");
+    let mut rows = Vec::new();
+    let mut bad_classes = std::collections::BTreeMap::new();
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let i = (y * w as usize + x) * 4;
+            let ix = (x % 4) as i64 - 1;
+            let iz = (y % 4) as i64 - 1;
+            let hz = hash_cell_reference(ix, 0, iz, params.seed);
+            let want = [(hz >> 32) as u32 & 0xffff, (hz >> 48) as u32, hz as u32 & 0xffff, (hz >> 16) as u32 & 0xffff];
+            let got: Vec<u32> = (0..4).map(|c| gpu[i + c] as u32).collect();
+            let ok = got == want;
+            if !ok {
+                bad_classes.entry((ix, iz)).or_insert_with(|| (got.clone(), want));
+            }
+            if x < 4 && y < 4 {
+                rows.push(format!("x {ix:+} z {iz:+}: {} gpu {:?} cpu {:?}", if ok { "ok  " } else { "DIFF" }, got, want));
+            }
+        }
+    }
+    for ((ix, iz), (got, want)) in &bad_classes {
+        rows.push(format!("first DIFF class x {ix:+} z {iz:+}: gpu {got:?} cpu {want:?}"));
+    }
+    eprintln!("hash z probe:\n{}", rows.join("\n"));
+    assert!(bad_classes.is_empty(), "cell hash differs for {} (x, z) classes", bad_classes.len());
+}
+
 /// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {

@@ -297,3 +297,18 @@ fn cs_roughen_octave_probe(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     textureStore(output, texel, v);
 }
+
+// Measurement probe (not a route): the cell hash for x and z in {-1, 0, 1, 2} (y = 0). Texel (x, y) holds the
+// cell x = (x mod 4) - 1, z = (y mod 4) - 1, split into four 16-bit parts like cs_roughen_hash_probe.
+@compute @workgroup_size(8, 8, 1)
+fn cs_roughen_hash_z_probe(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(output);
+    if (id.x >= size.x || id.y >= size.y) {
+        return;
+    }
+    let texel = vec2<i32>(id.xy);
+    let ix = (texel.x % 4) - 1;
+    let iz = (texel.y % 4) - 1;
+    let h = hash_u64(u64_of_i32(ix), u64_of_i32(0), u64_of_i32(iz), U64(pword(13u), pword(12u)));
+    textureStore(output, texel, vec4<f32>(f32(h.hi & 0xffffu), f32(h.hi >> 16u), f32(h.lo & 0xffffu), f32(h.lo >> 16u)));
+}
