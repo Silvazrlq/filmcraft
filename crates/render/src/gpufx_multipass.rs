@@ -280,7 +280,7 @@ fn vr_route_for(e: &filmcraft_project::EffectInstance, cx: &crate::effects::FxCt
 
 /// Routes the production planner may send to the GPU. Empty until each id's parity is measured on the
 /// AMD adapter; then the id moves here and out of `UNMEASURED_GPU_ROUTES`.
-pub const ROUTED_ON_GPU: &[&str] = &[];
+pub const ROUTED_ON_GPU: &[&str] = &["roughen_edges"];
 
 /// Whether the production planner may route `id` to the GPU multi-pass executor.
 pub fn is_routed(id: &str) -> bool {
@@ -481,6 +481,17 @@ mod tests {
         let denoise = multipass_route(&instance_with("vr_denoise", "amount", 50.0), &cx, 67, 41).expect("denoise route");
         assert_eq!(denoise.plan, vr_plan(VrKind::Denoise { sigma: 0.9, threshold: 0.08, show: false }, 0, 67, 41).expect("plan"));
         assert!(denoise.kernels.contains(&VR_KERNEL_DENOISE));
+    }
+
+    #[test]
+    fn production_roughen_route_reads_the_instance_parameters() {
+        let cx = multipass_cx();
+        let default = filmcraft_project::find_effect("roughen_edges").expect("roughen_edges").instance();
+        let base = multipass_route(&default, &cx, 67, 41).expect("roughen route");
+        let changed = multipass_route(&instance_with("roughen_edges", "border", 20.0), &cx, 67, 41).expect("roughen route");
+        assert_ne!(base.plan, changed.plan, "border must change the plan");
+        assert_eq!(base.id, "roughen_edges");
+        assert_eq!(base.plan, crate::gpufx_roughen::roughen_effect(&default, &cx, 67, 41).expect("roughen effect").plan);
     }
 
     #[test]

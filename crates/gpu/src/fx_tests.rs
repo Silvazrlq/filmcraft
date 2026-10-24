@@ -1056,7 +1056,8 @@ fn roughen_hash_z_probe_matches_cpu_on_adapter() {
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {
     for id in MULTIPASS_ROUTES {
-        assert!(UNMEASURED_GPU_ROUTES.contains(id), "{id} is a multipass route but not in UNMEASURED_GPU_ROUTES");
+        let routed = filmcraft_render::gpufx_multipass::ROUTED_ON_GPU.contains(id);
+        assert_eq!(UNMEASURED_GPU_ROUTES.contains(id), !routed, "{id}: routed routes leave UNMEASURED_GPU_ROUTES, the others stay");
         assert!(!GPU_EFFECTS.contains(id), "{id} is a multipass route but already in GPU_EFFECTS");
     }
 }

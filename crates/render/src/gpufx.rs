@@ -595,7 +595,7 @@ pub const GPU_EFFECTS: &[&str] = &[
 /// is refused by [`evaluate_gpu_effect`] (absent from [`GPU_EFFECTS`]) until its parity case passes.
 /// `posterize_time` and `compound_blur` need a frame of another instant or a track image, so they
 /// stay here as design-only entries; see TESTE-GPU-MULTIPASS.md.
-pub const UNMEASURED_GPU_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "roughen_edges", "spacer", "compound_blur", "posterize_time"];
+pub const UNMEASURED_GPU_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "spacer", "compound_blur", "posterize_time"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EffectGpuFailure {
@@ -664,6 +664,14 @@ pub fn evaluate_gpu_effect(e: &EffectInstance, cx: &FxCtx, w: usize, h: usize) -
     // effects::apply dispatches the seven-sample shutter oracle before FxOp::eval.
     if e.effect == "transform" && crate::vfx::bv(e, "shutter_override") && crate::vfx::fv(e, "shutter_angle", cx) > 0.5 {
         return Outcome::Ineligible(Failure::UnsupportedOperation);
+    }
+    // shortcut: a no-op value (roughen border below half a pixel) has no route and is refused here, not skipped; fix: report it as Disabled once the route exposes its no-op case
+    if crate::gpufx_multipass::is_routed(&e.effect) {
+        let op = u32::try_from(w).ok().zip(u32::try_from(h).ok()).and_then(|(w, h)| crate::gpufx_multipass::multipass_op(e, cx, w, h));
+        return match op {
+            Some(op) => Outcome::Eligible(FxOp::Multipass(op)),
+            None => Outcome::Ineligible(Failure::UnsupportedCase),
+        };
     }
     let Some(op) = FxOp::eval(e, cx, w, h) else {
         return Outcome::Ineligible(Failure::UnsupportedOperation);
