@@ -153,11 +153,47 @@ pub struct MultipassEffect {
     pub plan: MultipassPlan,
 }
 
-/// Builds the route for `id` on a `width` x `height` frame, if one is registered. The plan depends
+/// The parameter set the parity harness measures for `id`, or None when `id` has no route.
+///
+/// Spacer's project default (400 px margins) shrinks the layer below half scale on a small frame.
+/// That is the CPU-only mip route, so the measured case uses small margins that stay on the GPU.
+pub fn multipass_case(id: &str) -> Option<filmcraft_project::EffectInstance> {
+    let mut e = filmcraft_project::find_effect(id)?.instance();
+    if id == "spacer" {
+        for key in ["left", "top", "right", "bottom", "radius"] {
+            if let Some(p) = e.params.get_mut(key) {
+                p.value = filmcraft_project::ParamValue::Float(6.0);
+            }
+        }
+        if let Some(p) = e.params.get_mut("uniform") {
+            p.value = filmcraft_project::ParamValue::Bool(false);
+        }
+    }
+    Some(e)
+}
+
+/// The evaluation context the harness uses: pixel scale 1, no project, a 10 s clip at 24 fps.
+pub fn multipass_cx() -> crate::effects::FxCtx<'static> {
+    static CLIP: crate::vfx::ClipTiming =
+        crate::vfx::ClipTiming { clip_seconds: 10.0, clip_offset: 0.0, frame_rate: 24.0, sequence_size: (67, 41), source_size: (67, 41) };
+    crate::effects::FxCtx {
+        t: filmcraft_time::Tick::ZERO,
+        px_scale: 1.0,
+        seconds: 0.0,
+        timecode: "",
+        clip_name: "",
+        project: None,
+        env: Some(&CLIP),
+        frame_rate: 24.0,
+        working: filmcraft_color::WorkingSpace::Rec709,
+    }
+}
+
+/// VR route for `id` on a `width` x `height` frame. The plan depends
 /// on the frame size (view rectangles, vertical radii), so it is built for the size it will run at.
 /// The parameters are the fixed sample values of the parity case (see `MULTIPASS_ROUTES`); they are
 /// not yet read from the effect instance.
-pub fn multipass_effect_for(id: &str, width: u32, height: u32) -> Option<MultipassEffect> {
+fn vr_effect(id: &str, width: u32, height: u32) -> Option<MultipassEffect> {
     use crate::vfx::{VR_KERNEL_COL, VR_KERNEL_COPY, VR_KERNEL_DENOISE, VR_KERNEL_ROW, VR_KERNEL_SHARPEN, VrKind, vr_plan};
     const VR_KERNELS: &[&str] = &[VR_KERNEL_ROW, VR_KERNEL_COL, VR_KERNEL_COPY, VR_KERNEL_SHARPEN, VR_KERNEL_DENOISE];
     // Same WGSL module as crates/gpu/src/vr.wgsl; the render crate does not depend on filmcraft-gpu.
@@ -178,7 +214,26 @@ pub fn multipass_effect_for(id: &str, width: u32, height: u32) -> Option<Multipa
 
 /// Routes that have a plan, kernel and CPU parity case. Each id stays in
 /// `filmcraft_render::gpufx::UNMEASURED_GPU_ROUTES`, so the classifier still refuses it.
-pub const MULTIPASS_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise"];
+/// Builds the route for `id` on a `width` x `height` frame, if one is registered and applies to
+/// these parameters. None means the CPU renders the effect.
+pub fn multipass_effect_for(id: &str, width: u32, height: u32) -> Option<MultipassEffect> {
+    match id {
+        "vr_blur" | "vr_sharpen" | "vr_denoise" => vr_effect(id, width, height),
+        "roughen_edges" | "spacer" => {
+            let e = multipass_case(id)?;
+            let cx = multipass_cx();
+            match id {
+                "roughen_edges" => crate::gpufx_roughen::roughen_effect(&e, &cx, width, height),
+                _ => crate::gpufx_spacer::spacer_effect(&e, &cx, width, height),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Routes that have a plan, kernel and CPU parity case. The classifier in gpufx.rs still refuses
+/// every id here until the GPU parity is measured.
+pub const MULTIPASS_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "roughen_edges", "spacer"];
 
 #[cfg(test)]
 mod tests {
@@ -278,5 +333,15 @@ mod tests {
         let p = plan(vec![pass("k", &[0], 1)], 1);
         // 8K UHD is far above any fixed cap; the device, not this crate, decides
         assert_eq!(p.intermediate_bytes(7680, 4320), Ok(7680 * 4320 * 16));
+    }
+
+    #[test]
+    fn registered_routes_build_valid_plans_on_the_harness_frame() {
+        for id in MULTIPASS_ROUTES {
+            let route = multipass_effect_for(id, 67, 41).expect("registered route builds");
+            assert_eq!(route.id, *id);
+            assert!(route.plan.validate().is_ok(), "{id} plan");
+            assert!(route.plan.passes.iter().all(|p| route.kernels.contains(&p.kernel)), "{id} names a kernel it does not ship");
+        }
     }
 }

@@ -730,14 +730,17 @@ const MULTIPASS_TOLERANCE: f32 = EXACT;
 /// CPU oracle for each multipass route id: the same sample parameters as `multipass_effect_for`,
 /// through the CPU effect (`vfx::apply`), not through the plan.
 fn cpu_reference(id: &str, source: &filmcraft_render::Image) -> Option<filmcraft_render::Image> {
-    let e = match id {
-        "vr_blur" => effect("vr_blur", &[("blurriness", fl(4.0)), ("frame_layout", ch(0))]),
-        "vr_sharpen" => effect("vr_sharpen", &[("amount", fl(60.0)), ("frame_layout", ch(0))]),
-        "vr_denoise" => effect("vr_denoise", &[("amount", fl(50.0)), ("noise_type", ch(0)), ("show_noise", ParamValue::Bool(false)), ("frame_layout", ch(0))]),
-        _ => return None,
+    let (e, cx) = match id {
+        "vr_blur" => (effect("vr_blur", &[("blurriness", fl(4.0)), ("frame_layout", ch(0))]), cx(Tick::ZERO, 1.0)),
+        "vr_sharpen" => (effect("vr_sharpen", &[("amount", fl(60.0)), ("frame_layout", ch(0))]), cx(Tick::ZERO, 1.0)),
+        "vr_denoise" => (
+            effect("vr_denoise", &[("amount", fl(50.0)), ("noise_type", ch(0)), ("show_noise", ParamValue::Bool(false)), ("frame_layout", ch(0))]),
+            cx(Tick::ZERO, 1.0),
+        ),
+        _ => (filmcraft_render::gpufx_multipass::multipass_case(id)?, filmcraft_render::gpufx_multipass::multipass_cx()),
     };
     let mut out = source.clone();
-    filmcraft_render::vfx::apply(&mut out, &e, &cx(Tick::ZERO, 1.0)).then_some(out)
+    filmcraft_render::vfx::apply(&mut out, &e, &cx).then_some(out)
 }
 
 /// Every registered multipass route on the adapter against its CPU oracle, channel by channel.

@@ -50,6 +50,7 @@ pub mod fx;
 mod fx_multipass;
 pub mod lut;
 pub mod mask;
+mod noise_u64;
 pub mod nv12_repack;
 pub mod resident;
 mod timeline_transition;
