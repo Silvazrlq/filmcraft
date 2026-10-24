@@ -3599,3 +3599,8 @@
 	Reference view unavailable in GPU-only preview; CPU fallback is disabled	Vue de référence indisponible en aperçu GPU uniquement ; le repli CPU est désactivé
 	Scopes unavailable in GPU-only preview; CPU fallback is disabled	Scopes indisponibles en aperçu GPU uniquement ; le repli CPU est désactivé
 	no supported AMD GPU adapter; preview unavailable	Aucun adaptateur GPU AMD compatible ; aperçu indisponible
+	Enter renders: CPU	Entrée rend : CPU
+	Enter renders: GPU	Entrée rend : GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	Choisissez si Entrée rend les effets et transitions sur le CPU ou le GPU. La voie GPU n'est pas encore disponible et échoue sans rendu.
+	Saving preferences failed	Échec de l'enregistrement des préférences
+	Enter render backend	Moteur de rendu d'Entrée

@@ -3610,3 +3610,8 @@
 	Whisper large-v3 (GPU + vocal isolation)	Whisper large-v3（GPU + 人声分离）
 	Whisper large-v3 Q5_0 (multilingual, 1.08 GB)	Whisper large-v3 Q5_0（多语言，1.08 GB）
 	Whisper large-v3 Turbo (multilingual, 809 M, faster)	Whisper large-v3 Turbo（多语言，809 M，更快）
+	Enter renders: CPU	Enter 渲染：CPU
+	Enter renders: GPU	Enter 渲染：GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	选择按 Enter 时在 CPU 还是 GPU 上渲染效果和转场。GPU 路径暂不可用，会在不渲染的情况下失败。
+	Saving preferences failed	保存偏好设置失败
+	Enter render backend	Enter 渲染后端

@@ -1915,7 +1915,34 @@ impl FilmcraftApp {
         if resp.clicked() {
             self.ui.status.clear();
         }
-        self.job_status(ui, sb, &t);
+        let right = self.render_backend_control(ui, sb, &t);
+        self.job_status(ui, sb, &t, right);
+    }
+
+    /// Bottom-right CPU / GPU choice for Enter (Render Effects In to Out). Saved in preferences;
+    /// returns how far from the right edge the job status must stay.
+    fn render_backend_control(&mut self, ui: &mut egui::Ui, sb: egui::Rect, t: &Tokens) -> f32 {
+        let gpu = self.session.prefs.timeline.render_backend == "gpu";
+        let label = if gpu { tl!("Enter renders: GPU").to_string() } else { tl!("Enter renders: CPU").to_string() };
+        let width = 150.0;
+        let rect = egui::Rect::from_min_max(egui::pos2(sb.max.x - width - 8.0, sb.min.y + 2.0), egui::pos2(sb.max.x - 8.0, sb.max.y - 2.0));
+        let resp = ui.interact(rect, egui::Id::new("status-render-backend"), egui::Sense::click());
+        let c = if resp.hovered() { t.hot_text } else { t.text_dim };
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, &label, Tokens::ui(11.0), c);
+        self.auto.add("status.renderBackend", rect, &format!("Render backend: {}", if gpu { "GPU" } else { "CPU" }));
+        let hover =
+            tl!("Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.");
+        if resp.on_hover_text(hover).clicked() {
+            let previous = self.session.prefs.clone();
+            let mut next = previous.clone();
+            next.timeline.render_backend = if gpu { "cpu".into() } else { "gpu".into() };
+            if let Err(e) = self.session.set_prefs(next) {
+                // keep the shown choice equal to the saved one
+                self.session.prefs = previous;
+                self.ui.status = format!("{}: {e}", tl!("Saving preferences failed"));
+            }
+        }
+        sb.max.x - rect.min.x + 8.0
     }
 
     /// The running job (export / render previews), if any; plays the rendered range when a preview
@@ -1963,12 +1990,12 @@ impl FilmcraftApp {
 
     /// Right side of the status bar: the running job (export / render previews) with a progress
     /// bar and a cancel button.
-    fn job_status(&mut self, ui: &mut egui::Ui, sb: egui::Rect, t: &Tokens) {
+    fn job_status(&mut self, ui: &mut egui::Ui, sb: egui::Rect, t: &Tokens, right: f32) {
         use std::sync::atomic::Ordering;
         let Some(job) = self.watch_jobs(ui.ctx()) else { return };
         let f = job.progress.fraction().clamp(0.0, 1.0);
         let left = job.progress.eta().map(panels::left_text).unwrap_or_default();
-        let cancel = egui::Rect::from_center_size(egui::pos2(sb.max.x - 14.0, sb.center().y), egui::vec2(14.0, 14.0));
+        let cancel = egui::Rect::from_center_size(egui::pos2(sb.max.x - right - 14.0, sb.center().y), egui::vec2(14.0, 14.0));
         let bar = egui::Rect::from_min_size(egui::pos2(cancel.min.x - 128.0, sb.center().y - 3.0), egui::vec2(120.0, 6.0));
         let p = ui.painter();
         p.rect_filled(bar, 3.0, t.separator);

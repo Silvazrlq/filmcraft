@@ -3623,3 +3623,8 @@
 	Reference view unavailable in GPU-only preview; CPU fallback is disabled	Vista di riferimento non disponibile nell'anteprima solo GPU; il fallback CPU è disattivato
 	Scopes unavailable in GPU-only preview; CPU fallback is disabled	Scope non disponibili nell'anteprima solo GPU; il fallback CPU è disattivato
 	no supported AMD GPU adapter; preview unavailable	Nessun adattatore GPU AMD compatibile; anteprima non disponibile
+	Enter renders: CPU	Invio renderizza: CPU
+	Enter renders: GPU	Invio renderizza: GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	Scegli se Invio renderizza effetti e transizioni su CPU o GPU. Il percorso GPU non è ancora disponibile e fallisce senza renderizzare.
+	Saving preferences failed	Salvataggio delle preferenze non riuscito
+	Enter render backend	Motore di rendering di Invio
