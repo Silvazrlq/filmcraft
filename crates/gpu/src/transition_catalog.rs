@@ -10,9 +10,17 @@ mod light_multipass;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransitionCatalogError {
-    Unsupported { id: String },
-    InvalidPlan { id: String },
+    Unsupported {
+        id: String,
+    },
+    InvalidPlan {
+        id: String,
+    },
     InvalidSize,
+    /// The device could not allocate or validate the scratch resources of a kernel at this size.
+    AllocationFailed {
+        detail: String,
+    },
 }
 
 const PI: f32 = std::f32::consts::PI;
