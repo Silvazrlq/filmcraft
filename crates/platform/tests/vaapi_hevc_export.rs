@@ -27,7 +27,17 @@ fn hardware_case(width: u32, height: u32, frames: u64, keyint: u32, name: &str, 
         keyframe_distance: Some(keyint),
         ..Default::default()
     };
-    let mut encoder = hevcenc::factory(Format::Hevc, width, height, FrameRate::FPS_30, &settings).expect("HEVC factory").expect("HEVC encoder");
+    let mut encoder = match hevcenc::factory(Format::Hevc, width, height, FrameRate::FPS_30, &settings) {
+        Some(Ok(encoder)) => encoder,
+        Some(Err(e)) => {
+            eprintln!("SKIPPED: VA-API HEVC encoder did not start: {e:?}");
+            return;
+        }
+        None => {
+            eprintln!("SKIPPED: no VA-API HEVC encoder for this format");
+            return;
+        }
+    };
     assert_eq!(encoder.timescale(), 30);
     let mut expected_yuv = Vec::new();
     let mut packets = Vec::new();

@@ -1,7 +1,7 @@
 //! Physical AMD output-copy probe: synthetic NV12 bytes are uploaded from CPU into a Vulkan buffer,
 //! copied into a VA-API input surface, and encoded. The separate decoded-surface probe exercises
 //! real VA decode, DMA-BUF import and GPU repack without reading or uploading source pixels.
-//! These stage probes do not prove a complete exported movie. Missing hardware support fails.
+//! These stage probes do not prove a complete exported movie. Without an AMD adapter they print SKIPPED and return.
 #![cfg(target_os = "linux")]
 
 #[path = "it/common/mod.rs"]
@@ -41,20 +41,18 @@ fn await_adapter_list<F: std::future::Future>(future: F) -> F::Output {
 }
 
 /// Open the interop device from one physical AMD Vulkan adapter and its exact DRM render node.
-fn amd_interop_device() -> (wgpu::Adapter, wgpu::Device, wgpu::Queue, filmcraft_platform::vaapi::DrmNodeId) {
+/// `None` when this machine has no physical AMD Vulkan adapter (the caller skips).
+fn amd_interop_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, filmcraft_platform::vaapi::DrmNodeId)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN, ..wgpu::InstanceDescriptor::new_without_display_handle() });
-    let adapter = await_adapter_list(instance.enumerate_adapters(wgpu::Backends::VULKAN))
-        .into_iter()
-        .find(|adapter| {
-            let info = adapter.get_info();
-            info.vendor == 0x1002 && matches!(info.device_type, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu)
-        })
-        .expect("physical AMD Vulkan adapter is required for this probe");
+    let adapter = await_adapter_list(instance.enumerate_adapters(wgpu::Backends::VULKAN)).into_iter().find(|adapter| {
+        let info = adapter.get_info();
+        info.vendor == 0x1002 && matches!(info.device_type, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu)
+    })?;
     let node = filmcraft_platform::vulkan_import::render_node_id(&adapter).expect("AMD Vulkan adapter must expose its DRM render node");
     let (device, queue) = filmcraft_platform::vulkan_interop_device::create_amd_interop_device(&adapter, &wgpu::DeviceDescriptor::default(), node)
         .expect("selected AMD adapter must open with DMA-BUF and foreign queue-family capabilities");
     device.on_uncaptured_error(std::sync::Arc::new(|error: wgpu::Error| panic!("GPU error: {error}")));
-    (adapter, device, queue, node)
+    Some((adapter, device, queue, node))
 }
 
 /// Synthetic coded-size NV12 fixture. CPU upload here does not exercise source decoding.
@@ -112,7 +110,10 @@ fn picture_buffer(device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8]) -> w
 
 #[test]
 fn synthetic_gpu_nv12_output_copy_encodes_two_frames_on_amd() {
-    let (adapter, device, queue, node) = amd_interop_device();
+    let Some((adapter, device, queue, node)) = amd_interop_device() else {
+        eprintln!("SKIPPED: no physical AMD Vulkan adapter");
+        return;
+    };
     eprintln!("adapter: {:?}; DRM node: {node:?}", adapter.get_info());
     let mut encoder = VaH264Encoder::resident_on_node(node, 1920, 1080, FrameRate::FPS_30, &hw_settings())
         .expect("H.264 hardware settings must select the VA-API output path")
@@ -142,7 +143,10 @@ fn synthetic_gpu_nv12_output_copy_encodes_two_frames_on_amd() {
 
 #[test]
 fn short_synthetic_nv12_buffer_is_rejected_on_amd() {
-    let (adapter, device, queue, node) = amd_interop_device();
+    let Some((adapter, device, queue, node)) = amd_interop_device() else {
+        eprintln!("SKIPPED: no physical AMD Vulkan adapter");
+        return;
+    };
     eprintln!("adapter: {:?}; DRM node: {node:?}", adapter.get_info());
     let mut encoder = VaH264Encoder::resident_on_node(node, 1920, 1080, FrameRate::FPS_30, &hw_settings())
         .expect("H.264 hardware settings must select the VA-API output path")
@@ -183,7 +187,10 @@ fn decoded_va_surface_repackages_on_gpu_without_cpu_pixels() {
     let stream = common::read_stream(&path);
     let info = NalStreamInfo::from_entry(&stream.entry).expect("sample entry").expect("H.264 stream");
     let (sample, pts) = stream.samples.iter().find(|(sample, _)| info.nal_types(sample).contains(&5)).expect("IDR sample");
-    let (adapter, device, queue, node) = amd_interop_device();
+    let Some((adapter, device, queue, node)) = amd_interop_device() else {
+        eprintln!("SKIPPED: no physical AMD Vulkan adapter");
+        return;
+    };
     let mut decoder = ResidentVaDecoder::new_linear_diagnostic(info, node).expect("strict VA decoder");
     let mut capture = Capture::default();
     decoder.decode(sample, *pts, &mut capture).expect("decode IDR without CPU pixels");
