@@ -55,6 +55,8 @@ pub enum MultipassError {
     SlotOutOfRange { slot: u8 },
     /// A pass reads more than [`MAX_INPUTS`] slots.
     TooManyInputs { pass: usize },
+    /// A pass reads no slot. Every kernel reads at least one input.
+    NoInputs { pass: usize },
     /// A pass has no kernel name.
     EmptyKernel { pass: usize },
     /// A pass writes the source slot.
@@ -84,6 +86,9 @@ impl MultipassPlan {
         for (index, pass) in self.passes.iter().enumerate() {
             if pass.kernel.is_empty() {
                 return Err(MultipassError::EmptyKernel { pass: index });
+            }
+            if pass.inputs.is_empty() {
+                return Err(MultipassError::NoInputs { pass: index });
             }
             if pass.inputs.len() > MAX_INPUTS {
                 return Err(MultipassError::TooManyInputs { pass: index });
@@ -186,6 +191,11 @@ mod tests {
     fn result_must_be_an_intermediate_some_pass_wrote() {
         assert_eq!(plan(vec![pass("k", &[0], 1)], 2).validate(), Err(MultipassError::ResultNotWritten { slot: 2 }));
         assert_eq!(plan(vec![pass("k", &[0], 1)], 0).validate(), Err(MultipassError::ResultNotWritten { slot: 0 }));
+    }
+
+    #[test]
+    fn a_pass_with_no_inputs_is_refused() {
+        assert_eq!(plan(vec![pass("k", &[], 1)], 1).validate(), Err(MultipassError::NoInputs { pass: 0 }));
     }
 
     #[test]
