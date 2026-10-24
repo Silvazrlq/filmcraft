@@ -137,7 +137,9 @@ impl ExportRenderer {
                 }
                 let instance = wgpu::Instance::default();
                 let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-                let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+                // The adapter's own limits: a 4K or 8K export needs more than wgpu's 8192 default.
+                let descriptor = wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() };
+                let (device, queue) = pollster::block_on(adapter.request_device(&descriptor)).ok()?;
                 // wgpu's default handler panics on a validation or out-of-memory error; retire
                 // this optional legacy device so required callers cannot mistake it for healthy.
                 device.on_uncaptured_error(std::sync::Arc::new(|e: wgpu::Error| mark_device_failed(&format!("GPU error: {e}"))));
@@ -165,7 +167,9 @@ impl ExportRenderer {
             .find(|adapter| validate_required_adapter(&adapter.get_info()).is_ok())
             .ok_or_else(|| strict_error(EligibilityFailure::UnsupportedAdapter { vendor: 0 }))?;
         validate_required_adapter(&adapter.get_info())?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        // The adapter's own limits, so resolutions above wgpu's 8192 default are not refused here.
+        let descriptor = wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() };
+        let (device, queue) = pollster::block_on(adapter.request_device(&descriptor))
             .map_err(|error| strict_error(EligibilityFailure::RuntimeFailure { stage: "AMD device request", detail: error.to_string() }))?;
         Self::from_required_device(instance, adapter, device, queue)
     }

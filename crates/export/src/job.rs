@@ -905,7 +905,7 @@ mod tests {
 
     fn nvenc_fake(format: Format, w: u32, h: u32, _: FrameRate, s: &ExportSettings) -> Option<crate::Result<Box<dyn VideoEncoder>>> {
         let present = NVIDIA_PRESENT.load(Ordering::SeqCst);
-        (present && format == Format::H264 && (w, h) == MATRIX_SIZE && s.hardware_encoding == HardwareEncoding::Auto)
+        (present && format == Format::H264 && (w, h) == MATRIX_SIZE && matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::NvencRequired))
             .then(|| Ok(Box::new(Fake(9001)) as Box<dyn VideoEncoder>))
     }
 
@@ -945,6 +945,34 @@ mod tests {
                 None => assert!(chosen(Format::Hevc).is_err_and(|e| e.contains("not available")), "{label}: HEVC has no encoder"),
             }
         }
+        NVIDIA_PRESENT.store(false, Ordering::SeqCst);
+        AMD_PRESENT.store(false, Ordering::SeqCst);
+    }
+
+    /// The time scale of the encoder `make_venc` picks for `mode`, or its error text.
+    fn chosen_for(format: Format, mode: HardwareEncoding) -> std::result::Result<u32, String> {
+        let settings = ExportSettings { format, hardware_encoding: mode, ..Default::default() };
+        make_venc(&settings, MATRIX_SIZE.0, MATRIX_SIZE.1, FrameRate::FPS_24).map(|e| e.timescale()).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn nvidia_required_never_uses_vaapi_or_software() {
+        crate::register_encoder(vaapi_fake);
+        crate::register_encoder(nvenc_fake);
+        // NVENC present: NVENC H.264 only; AMD present alongside it must not be used
+        NVIDIA_PRESENT.store(true, Ordering::SeqCst);
+        AMD_PRESENT.store(true, Ordering::SeqCst);
+        assert_eq!(chosen_for(Format::H264, HardwareEncoding::NvencRequired), Ok(9001), "NVENC H.264");
+        assert!(chosen_for(Format::Hevc, HardwareEncoding::NvencRequired).is_err(), "HEVC NVENC is not on Linux: error, not VA-API");
+        // NVENC absent: an error, never the software encoder, even with AMD present
+        NVIDIA_PRESENT.store(false, Ordering::SeqCst);
+        let err = chosen_for(Format::H264, HardwareEncoding::NvencRequired);
+        assert!(err.is_err(), "NVENC required without NVENC must fail, got {err:?}");
+        // AMD required never reaches NVENC
+        NVIDIA_PRESENT.store(true, Ordering::SeqCst);
+        AMD_PRESENT.store(false, Ordering::SeqCst);
+        let amd = chosen_for(Format::H264, HardwareEncoding::AmdRequired);
+        assert!(amd.is_err(), "AMD required must not use NVENC, got {amd:?}");
         NVIDIA_PRESENT.store(false, Ordering::SeqCst);
         AMD_PRESENT.store(false, Ordering::SeqCst);
     }

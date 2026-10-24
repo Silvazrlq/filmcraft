@@ -33,7 +33,8 @@ fn config(w: u32, h: u32, rate: FrameRate, s: &ExportSettings, caps: &HevcEncode
     if matches!(s.bitrate_mode, BitrateMode::Crf | BitrateMode::Vbr2Pass) || !matches!(s.h264_pass, H264Pass::Single) {
         return Err("HEVC Main requires single-pass CBR or VBR".into());
     }
-    let (mw, mh) = caps.limits.max_size.unwrap_or((4096, 4096));
+    // Without a driver-declared maximum, the format ceiling (16384) applies, not a policy limit.
+    let (mw, mh) = caps.limits.max_size.unwrap_or((16384, 16384));
     if w == 0 || h == 0 || w > mw.min(16384) || h > mh.min(16384) || !w.is_multiple_of(2) || !h.is_multiple_of(2) {
         return Err(format!("HEVC Main needs even dimensions, at most {mw}x{mh}: {w}x{h}"));
     }
@@ -508,7 +509,7 @@ impl VideoEncoder for VaHevcEncoder {
 
 /// Choosing HEVC is the hardware opt-in, including with the H.264 hardware toggle off.
 pub fn factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<Result<Box<dyn VideoEncoder>>> {
-    if format != Format::Hevc {
+    if format != Format::Hevc || s.hardware_encoding == HardwareEncoding::NvencRequired {
         return None;
     }
     let built = VaHevcEncoder::resident(w, h, rate, s)?;
@@ -649,16 +650,25 @@ mod tests {
 
     #[test]
     fn invalid_settings_are_rejected_before_session_creation() {
-        let caps = HevcEncodeCaps {
-            limits: va::EncodeCaps { rate_control: ffi::VA_RC_CBR | ffi::VA_RC_VBR, max_size: Some((4096, 4096)) },
+        // A driver that declares an 8K maximum (CTU-aligned: 4352 rows cover 4320): 8K is taken, the odd and zero sizes are not.
+        let mut caps = HevcEncodeCaps {
+            limits: va::EncodeCaps { rate_control: ffi::VA_RC_CBR | ffi::VA_RC_VBR, max_size: Some((7680, 4352)) },
             entrypoint: ffi::VAEntrypointEncSlice,
             packed_headers: 0,
         };
         let s = ExportSettings { format: Format::Hevc, bitrate_kbps: 500, ..Default::default() };
         assert!(config(1920, 1080, FrameRate::FPS_30, &s, &caps).is_ok());
-        for (w, h) in [(0, 1080), (7680, 4320), (1919, 1080), (1920, 1079)] {
+        assert!(config(7680, 4320, FrameRate::FPS_30, &s, &caps).is_ok(), "8K is taken when the driver declares it");
+        for (w, h) in [(0, 1080), (1919, 1080), (1920, 1079)] {
             assert!(config(w, h, FrameRate::FPS_30, &s, &caps).is_err());
         }
+        // A driver that declares 4096 refuses 8K with an explicit error.
+        caps.limits.max_size = Some((4096, 4096));
+        assert!(config(7680, 4320, FrameRate::FPS_30, &s, &caps).is_err(), "driver declares 4096");
+        // No declared maximum: the format ceiling (16384) applies.
+        caps.limits.max_size = None;
+        assert!(config(7680, 4320, FrameRate::FPS_30, &s, &caps).is_ok(), "no declared size: format ceiling");
+        assert!(config(16386, 16, FrameRate::FPS_30, &s, &caps).is_err(), "above the format ceiling");
         assert!(config(128, 128, FrameRate { num: 30, den: 0 }, &s, &caps).is_err());
     }
     #[test]

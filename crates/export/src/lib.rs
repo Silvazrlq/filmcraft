@@ -2294,7 +2294,8 @@ pub(crate) fn h264_slices(height: u32) -> usize {
 }
 
 fn h264_factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<Result<Box<dyn VideoEncoder>>> {
-    if format != Format::H264 || s.hardware_encoding == HardwareEncoding::AmdRequired {
+    // The software encoder is never a fallback for a hardware-required mode
+    if format != Format::H264 || matches!(s.hardware_encoding, HardwareEncoding::AmdRequired | HardwareEncoding::NvencRequired) {
         return None;
     }
     let mut cfg = filmcraft_h264enc::EncoderConfig::new(w, h, rate.num as u32, rate.den as u32);

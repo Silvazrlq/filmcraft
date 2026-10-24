@@ -259,7 +259,7 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
                     HardwareEncoding::Off
                 }
             }
-            other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "hardwareEncoding: off | auto | amdRequired"))?,
+            other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "hardwareEncoding: off | auto | amdRequired | nvencRequired"))?,
         };
     }
     if let Some(v) = p.get("gpuRendering") {
@@ -274,9 +274,19 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
             other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "gpuRendering: off | auto | amdRequired"))?,
         };
     }
+    if settings.hardware_encoding == HardwareEncoding::NvencRequired {
+        if settings.gpu_rendering != GpuRendering::Off {
+            return Err(bad(cmd, "hardwareEncoding nvencRequired takes CPU rendering: gpuRendering off"));
+        }
+        if p.get("hardwareExport").is_some() {
+            return Err(bad(cmd, "hardwareEncoding nvencRequired does not combine with hardwareExport"));
+        }
+    }
     if let Some(value) = p.get("hardwareExport") {
         let enabled = value.as_bool().ok_or_else(|| bad(cmd, "hardwareExport must be a boolean"))?;
         settings.set_hardware_export(enabled);
+    } else if settings.hardware_encoding == HardwareEncoding::NvencRequired {
+        // NVIDIA-only mode keeps its own encoder choice; the GPU renderer stays as requested
     } else {
         // Legacy serialized settings may contain Auto; normalize every enabled request to strict AMD mode.
         settings.set_hardware_export(settings.gpu_rendering != GpuRendering::Off || settings.hardware_encoding != HardwareEncoding::Off);

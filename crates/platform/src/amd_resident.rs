@@ -264,7 +264,8 @@ pub(crate) fn create_session(
         .into_iter()
         .find(|adapter| adapter.get_info().vendor == 0x1002 && render_node_id(adapter).ok() == Some(node))
         .ok_or_else(|| ExportError::Unsupported("the admitted AMD Vulkan render node is unavailable".into()))?;
-    let descriptor = wgpu::DeviceDescriptor::default();
+    // The adapter's own limits: `create_amd_interop_device` checks the request against them.
+    let descriptor = wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() };
     let (device, queue) = create_amd_interop_device(&adapter, &descriptor, node).map_err(ExportError::Unsupported)?;
     let renderer =
         ExportRenderer::from_required_device(instance, adapter, device.clone(), queue.clone()).map_err(|error| ExportError::Unsupported(error.to_string()))?;

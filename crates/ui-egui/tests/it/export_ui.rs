@@ -141,7 +141,7 @@ fn export_mode_settings_and_summary() {
         "export.section.multiplexer",
         "export.video.matchSize",
         "export.video.bitrateMode",
-        "export.video.cpuExport",
+        "export.video.encoder",
         "export.video.maxQuality",
         "export.audio.sampleRate",
         "export.range",
@@ -226,7 +226,7 @@ fn h265_shows_the_h264_family_controls_without_the_h264_only_ones() {
     d.ok("ui.set", json!({"mode": "export"}));
     d.frames(4);
     // H.264, the default: profile, level and the hardware checkbox
-    for id in ["export.video.profile", "export.video.level", "export.video.cpuExport", "export.video.bitrateMode"] {
+    for id in ["export.video.profile", "export.video.level", "export.video.encoder", "export.video.bitrateMode"] {
         assert!(d.has(id), "H.264: {id}");
     }
     d.app().ui.export.settings = ExportSettings { format: Format::Hevc, ..Default::default() };
@@ -242,11 +242,11 @@ fn h265_shows_the_h264_family_controls_without_the_h264_only_ones() {
     ] {
         assert!(d.has(id), "H.265: {id}");
     }
-    // Main is its only profile and the level is the encoder's choice; H.265 keeps the GPU route, so the CPU checkbox stays
+    // Main is its only profile and the level is the encoder's choice; H.265 keeps the GPU route, so the encoder selector stays
     for id in ["export.video.profile", "export.video.level"] {
         assert!(!d.has(id), "H.265 has no {id}");
     }
-    assert!(d.has("export.video.cpuExport"), "H.265 keeps the CPU checkbox");
+    assert!(d.has("export.video.encoder"), "H.265 keeps the encoder selector");
     let sum = d.ok("ui.elements", json!({"prefix": "export.summary"}))[0]["label"].as_str().unwrap().to_string();
     assert!(sum.contains("HEVC Main") && sum.contains("Target 20.00 Mbps"), "{sum}");
     d.snapshot("export-h265");
@@ -260,7 +260,7 @@ fn cpu_export_checkbox_picks_the_export_route() {
     let mut d = Driver::new("cpu-export");
     d.ok("ui.set", json!({"mode": "export"}));
     d.frames(4);
-    assert!(d.has("export.video.cpuExport"), "CPU checkbox");
+    assert!(d.has("export.video.encoder"), "CPU checkbox");
     assert!(!d.has("export.video.hardwareEncoding"), "the old hardware id is gone");
     // (gpu, hardware encoding) that the export params carry
     let route = |d: &mut Driver| {

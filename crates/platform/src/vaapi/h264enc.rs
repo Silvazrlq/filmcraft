@@ -33,8 +33,9 @@ const LOG2_MAX_FRAME_NUM: u32 = 8;
 const LOG2_MAX_POC_LSB: u32 = 8;
 /// Reconstructed-picture surfaces: the picture being encoded and its one reference.
 const RECON: usize = 2;
-/// The largest picture taken when the driver does not say.
-const DEFAULT_MAX_SIZE: (u32, u32) = (4096, 4096);
+/// The picture size taken when the driver does not say: the H.264 format ceiling, not a policy
+/// limit. A driver that declares a smaller maximum still refuses with an error.
+const DEFAULT_MAX_SIZE: (u32, u32) = (16384, 16384);
 
 /// What the encoder was asked to do.
 #[derive(Clone, Debug)]
@@ -74,6 +75,10 @@ pub(crate) fn config(format: Format, w: u32, h: u32, rate: FrameRate, s: &Export
     }
     if s.bitrate_mode == BitrateMode::Crf {
         return Err("constant-quality (CRF) rate control".into());
+    }
+    // H.264 level 6.2 caps a picture at 139264 macroblocks (MaxFS); a larger one has no conforming level
+    if u64::from(w.div_ceil(16)) * u64::from(h.div_ceil(16)) > 139_264 {
+        return Err(format!("{w}x{h} exceeds the H.264 level 6.2 frame size"));
     }
     if s.field_order != FieldOrder::Progressive {
         return Err("interlaced output".into());
@@ -624,7 +629,8 @@ mod tests {
     use filmcraft_export::{BitrateMode, ExportSettings, FieldOrder, Format, H264Pass, H264Profile, HardwareEncoding};
     use filmcraft_time::FrameRate;
 
-    const CAPS: EncodeCaps = EncodeCaps { rate_control: ffi::VA_RC_CBR | ffi::VA_RC_VBR, max_size: Some((4096, 4096)) };
+    /// A driver that declares an 8K maximum (7680x4320).
+    const CAPS: EncodeCaps = EncodeCaps { rate_control: ffi::VA_RC_CBR | ffi::VA_RC_VBR, max_size: Some((7680, 4320)) };
 
     fn auto() -> ExportSettings {
         ExportSettings { format: Format::H264, hardware_encoding: HardwareEncoding::Auto, bitrate_kbps: 20_000, ..Default::default() }
@@ -650,12 +656,21 @@ mod tests {
     }
 
     #[test]
-    fn too_large_for_the_gpu_is_declined() {
-        assert!(cfg(&auto(), 7680, 4320).unwrap_err().contains("4096x4096"));
+    fn size_is_what_the_driver_declares() {
+        // 4K and 8K are taken when the driver declares them.
+        assert!(cfg(&auto(), 3840, 2160).is_ok());
+        assert!(cfg(&auto(), 7680, 4320).is_ok());
+        // A driver that declares less refuses with an explicit error.
+        let mid = EncodeCaps { max_size: Some((4096, 4096)), ..CAPS };
+        assert!(config(Format::H264, 7680, 4320, FrameRate::FPS_30, &auto(), &mid).unwrap_err().contains("4096x4096"));
         let small = EncodeCaps { max_size: Some((1920, 1088)), ..CAPS };
         assert!(config(Format::H264, 3840, 2160, FrameRate::FPS_30, &auto(), &small).is_err());
+        // Without a declared maximum, the format ceiling (16384) applies.
         let unknown = EncodeCaps { max_size: None, ..CAPS };
-        assert!(config(Format::H264, 3840, 2160, FrameRate::FPS_30, &auto(), &unknown).is_ok(), "default limit 4096");
+        assert!(config(Format::H264, 3840, 2160, FrameRate::FPS_30, &auto(), &unknown).is_ok(), "no declared size: format ceiling");
+        assert!(config(Format::H264, 7680, 4320, FrameRate::FPS_30, &auto(), &unknown).is_ok());
+        assert!(config(Format::H264, 16386, 16, FrameRate::FPS_30, &auto(), &unknown).unwrap_err().contains("16384x16384"));
+        assert!(config(Format::H264, 16384, 16384, FrameRate::FPS_30, &auto(), &unknown).unwrap_err().contains("level 6.2"));
         assert!(cfg(&auto(), 0, 1080).is_err());
     }
 

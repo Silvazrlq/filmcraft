@@ -6,10 +6,24 @@ use wgpu::util::DeviceExt;
 use crate::transition_catalog::TransitionCatalogError;
 
 type Target = (wgpu::Texture, wgpu::TextureView, (u32, u32));
-const TEMP_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Ceiling on one transition's temporaries, whatever the device allows: a guard against an accidental
+/// multi-gigabyte allocation, not a resolution limit (8K needs about 3 GB for the blur, 1 GB for light).
+const TEMP_BUDGET_CEILING_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 fn temp_bytes(size: (u32, u32)) -> Option<u64> {
     u64::from(size.0).checked_mul(u64::from(size.1)).and_then(|n| n.checked_mul(16)).and_then(|n| n.checked_mul(2))
+}
+
+/// Whether the two-image temporaries of `size` fit `budget` bytes (checked arithmetic: overflow does not fit).
+fn within_budget(size: (u32, u32), budget: u64) -> bool {
+    temp_bytes(size).is_some_and(|n| n <= budget)
+}
+
+/// Budget for the temporaries: what the device's limits say a buffer may hold (the adapter's
+/// `max_buffer_size` when the device is created from `adapter.limits()`), not a fixed guess.
+fn temp_budget_bytes(limits: &wgpu::Limits) -> u64 {
+    limits.max_buffer_size.min(TEMP_BUDGET_CEILING_BYTES)
 }
 
 pub(crate) struct TransitionLightMultipassStage {
@@ -198,13 +212,8 @@ impl TransitionLightMultipassStage {
             return Err(TransitionCatalogError::InvalidPlan { id: id.into() });
         }
         let limits = device.limits();
-        let bytes = temp_bytes(size);
-        if size.0 == 0
-            || size.1 == 0
-            || size.0 > limits.max_texture_dimension_2d
-            || size.1 > limits.max_texture_dimension_2d
-            || bytes.is_none_or(|n| n > TEMP_BUDGET_BYTES)
-        {
+        let budget = temp_budget_bytes(&limits);
+        if size.0 == 0 || size.1 == 0 || size.0 > limits.max_texture_dimension_2d || size.1 > limits.max_texture_dimension_2d || !within_budget(size, budget) {
             return Err(TransitionCatalogError::InvalidSize);
         }
         if self.targets.iter().flatten().any(|target| target.2 != size) {
@@ -274,10 +283,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checked_two_image_budget_accepts_4k_and_rejects_8k() {
+    fn two_image_budget_follows_the_device_limit() {
         assert_eq!(temp_bytes((3840, 2160)), Some(265_420_800));
-        assert!(temp_bytes((7680, 4320)).is_some_and(|n| n > TEMP_BUDGET_BYTES));
+        assert_eq!(temp_bytes((7680, 4320)), Some(1_061_683_200));
         assert_eq!(temp_bytes((u32::MAX, u32::MAX)), None);
         assert_eq!(temp_bytes((0, 100)), Some(0));
+        // 4K fits any budget that covers its 265 MB of temporaries.
+        assert!(within_budget((3840, 2160), 4 << 30));
+        // 8K is accepted when the device budget covers its ~1 GiB ...
+        assert!(within_budget((7680, 4320), 2 << 30));
+        // ... and refused when it does not (explicit test budget of 512 MiB).
+        assert!(!within_budget((7680, 4320), 512 << 20));
+        // Overflowing sizes never fit.
+        assert!(!within_budget((u32::MAX, u32::MAX), u64::MAX));
     }
 }

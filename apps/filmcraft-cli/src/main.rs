@@ -133,14 +133,19 @@ SUBCOMMANDS
   inspect [project|sequence]    project tree or active sequence as JSON (default: both)
   import <file>...              import media into the project
   export <out> [--preset name] [--format f] [--range r] [--start s --end s] [--settings json]
-         [--hardware-export]
+         [--hardware-export] [--hardware-encoding off|auto|amdRequired|nvencRequired]
          [--scale f] [--quality 0-100] [--no-audio] [--queue] [--allow-offline]
                                 export the active sequence and wait for it to finish: with an
                                 export preset (`export --list-presets`; built-in or the user's), or
                                 a format (h264|hevc|prores|dnxhr|apv|mjpeg|mxf-op1a|mxf-opatom|png|tiff|bmp|gif|wav|aiff|aac, guessed
                                 from the extension); --range entire|inOut|workArea, or a custom
                                 range in seconds; --hardware-export requires AMD GPU rendering and
-                                same-node VA-API and fails if either is unavailable; --settings is
+                                same-node VA-API and fails if either is unavailable;
+                                --hardware-encoding picks the encoder instead: amdRequired (AMD
+                                VA-API), nvencRequired (NVIDIA NVENC, with CPU rendering; fails
+                                closed, never falls back to the CPU encoder), auto or off, and
+                                it does not combine with --hardware-export or --gpu-rendering;
+                                --settings is
                                 ExportSettings JSON merged over the
                                 preset; --scale renders at a fraction of the frame size (0.5 =
                                 half); --quality 0-100 for the formats that take one; --no-audio
@@ -663,6 +668,16 @@ async fn cli() {
                     _ => usage("--gpu-rendering: off | auto | amdRequired"),
                 };
                 p["hardwareExport"] = json!(enabled);
+            }
+            if let Some(v) = a.opt("--hardware-encoding") {
+                // the engine reads a top-level `hardwareEncoding`; `hardwareExport` would overwrite it, so the two never mix
+                if a.flag("--hardware-export") || a.opt("--gpu-rendering").is_some() {
+                    usage("--hardware-encoding does not combine with --hardware-export or --gpu-rendering");
+                }
+                match v {
+                    "off" | "auto" | "amdRequired" | "nvencRequired" => p["hardwareEncoding"] = json!(v),
+                    _ => usage("--hardware-encoding: off | auto | amdRequired | nvencRequired"),
+                }
             }
             let mut b = Backend::open(&a);
             let t0 = std::time::Instant::now();

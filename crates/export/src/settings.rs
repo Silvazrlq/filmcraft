@@ -75,6 +75,9 @@ pub enum HardwareEncoding {
     Auto,
     /// Require the AMD VA-API encoder. Never use NVENC or the software encoder.
     AmdRequired,
+    /// Require the NVIDIA NVENC encoder (H.264 on Linux and Windows). Never use VA-API or the software
+    /// encoder; an NVENC refusal is an error, not a fall-through to the CPU.
+    NvencRequired,
 }
 
 /// Whether an export uses the CPU reference renderer or requires GPU-resident rendering. Auto

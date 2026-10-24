@@ -6,7 +6,17 @@ use wgpu::util::DeviceExt;
 use crate::transition_catalog::TransitionCatalogError;
 
 type Target = (wgpu::Texture, wgpu::TextureView, (u32, u32));
-const TEMP_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Ceiling on one transition's temporaries, whatever the device allows: a guard against an accidental
+/// multi-gigabyte allocation, not a resolution limit (8K needs about 3 GB for the blur, 1 GB for light).
+const TEMP_BUDGET_CEILING_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Budget for the temporary targets of one blur: what the device's limits say a buffer may hold
+/// (the adapter's `max_buffer_size` when the device is created from `adapter.limits()`), not a
+/// fixed guess. A size above it is refused with an error.
+fn temp_budget_bytes(limits: &wgpu::Limits) -> u64 {
+    limits.max_buffer_size.min(TEMP_BUDGET_CEILING_BYTES)
+}
 
 pub(crate) struct TransitionBlurStage {
     box_pipeline: wgpu::ComputePipeline,
@@ -258,12 +268,13 @@ impl TransitionBlurStage {
         op: BlurOp,
     ) -> Result<(), TransitionCatalogError> {
         let limits = device.limits();
+        let budget = temp_budget_bytes(&limits);
         let bytes = u64::from(size.0).checked_mul(u64::from(size.1)).and_then(|n| n.checked_mul(16)).and_then(|n| n.checked_mul(6));
         if size.0 == 0
             || size.1 == 0
             || size.0 > limits.max_texture_dimension_2d
             || size.1 > limits.max_texture_dimension_2d
-            || bytes.is_none_or(|n| n > TEMP_BUDGET_BYTES)
+            || bytes.is_none_or(|n| n > budget)
         {
             return Err(TransitionCatalogError::InvalidSize);
         }

@@ -913,3 +913,33 @@ decode 2642 / 2925 → 2506 / 2064; playback 5246 / 7903 → 3379 / 3121; scrub 
 Not feasible / not done: reduced-resolution decode for H.264 / HEVC (inter prediction needs
 full-resolution references, so it cannot be bit-exact; ½/¼ playback already decimates after
 decode); AV1 internals untouched (measured only); export encoders not optimised.
+
+## Export on GPUs: AMD (VA-API) and NVIDIA (NVENC), no artificial resolution cap
+
+**What changed.** Export ▸ Encoder now chooses one hardware route explicitly:
+
+- **AMD (VA-API)**: `hardwareEncoding: amdRequired` with GPU rendering `amdRequired` (frames stay on the GPU
+  and reach the VA-API encoder through DMA-BUF). Never NVENC, never software.
+- **NVIDIA (NVENC)**: `hardwareEncoding: nvencRequired` with GPU rendering off (CPU reference render, NVENC
+  encodes). Never VA-API, never software. A refusal is an error. H.264 only on Linux; H.265 NVENC is Windows-only.
+- **CPU**: the reference route, as before.
+
+`hardwareEncoding: auto` (engine) and the legacy `--hardware-export` flag keep their meanings. The CLI gains
+`--hardware-encoding off|auto|amdRequired|nvencRequired`.
+
+Resolution caps removed or derived from the device:
+
+- The wgpu devices in the export renderer and the AMD resident session request `adapter.limits()` instead of
+  wgpu's defaults (which capped textures at 8192 px and storage bindings at 128 MiB).
+- Transition blur and light multipass budgets come from the adapter's `max_buffer_size`, not a fixed 512 MiB.
+- VA-API H.264 and HEVC use the driver's declared maximum; without one, the format ceiling (16384) applies and
+  the driver refuses with an error if it cannot encode.
+
+**Measured.** Nothing on hardware in this change. The tests run without a GPU: the encoder matrix
+(`export::job::tests::encoder_matrix_selects_expected_backend`, `nvidia_required_never_uses_vaapi_or_software`),
+the VA-API and NVENC configuration gates with declared caps (`vaapi::h264enc`, `vaapi::hevcenc`, `amd_admission_size_follows_the_driver_declared_maximum`),
+the blur and light budget checks, and the UI and CLI parsing. How to measure 1080p and 4K on your own machine:
+[`TESTE-EXPORT-GPU.md`](../TESTE-EXPORT-GPU.md).
+
+**Not measured.** Throughput and memory at 4K and 8K on AMD or NVIDIA; the driver's real 8K limit; H.265 8K
+through VA-API (the CTU-aligned height, 4352 for 4320, must be accepted by the driver).
