@@ -436,6 +436,17 @@ mod tests {
     }
 
     #[test]
+    fn production_roughen_route_reads_the_instance_parameters() {
+        let cx = multipass_cx();
+        let default = filmcraft_project::find_effect("roughen_edges").expect("roughen_edges").instance();
+        let base = multipass_route(&default, &cx, 67, 41).expect("roughen route");
+        let changed = multipass_route(&instance_with("roughen_edges", "border", 20.0), &cx, 67, 41).expect("roughen route");
+        assert_ne!(base.plan, changed.plan, "border must change the plan");
+        assert_eq!(base.id, "roughen_edges");
+        assert_eq!(base.plan, crate::gpufx_roughen::roughen_effect(&default, &cx, 67, 41).expect("roughen effect").plan);
+    }
+
+    #[test]
     fn production_vr_route_refuses_no_op_values_and_unknown_ids() {
         let cx = multipass_cx();
         assert!(multipass_route(&instance_with("vr_sharpen", "amount", 0.0), &cx, 67, 41).is_none());
