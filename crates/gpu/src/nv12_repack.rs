@@ -255,6 +255,7 @@ impl Nv12Repack {
 
         // Validation scope turns cross-device/import mismatches into a returned error before
         // recording any compute or texture-copy commands.
+        let _device_scopes = crate::device_scope::lock();
         let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let binding = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {

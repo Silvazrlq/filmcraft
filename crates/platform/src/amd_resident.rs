@@ -534,6 +534,8 @@ impl H264ResidentSession {
         if output_layout.size > device.limits().max_buffer_size || output_layout.size > device.limits().max_storage_buffer_binding_size {
             return Err(ExportError::Unsupported("resident output buffer exceeds Vulkan device limits".into()));
         }
+        // the renderer's device is shared with the export renderer pool: error scopes go under its lock
+        let _device_scopes = filmcraft_gpu::device_scope::lock();
         let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let output = device.create_buffer(&wgpu::BufferDescriptor {

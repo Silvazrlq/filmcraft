@@ -44,6 +44,7 @@ use filmcraft_render::plan::{
 pub mod adapter;
 mod blur_transition;
 pub mod demo_source;
+pub mod device_scope;
 pub mod export_renderer;
 pub mod fx;
 pub mod lut;
@@ -593,6 +594,7 @@ impl GpuCompositor {
         // check (Rgba32Float is not renderable everywhere, e.g. software Vulkan/GL). Capture
         // validation errors; legacy calls may render effects on CPU, while strict calls fail.
         let (fx, fx_unavailable_reason) = if fx::FxStage::supported(device) {
+            let _device_scopes = crate::device_scope::lock();
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let stage = fx::FxStage::new(device, &shader, &layer_bgl);
             match poll_now(scope.pop()) {
@@ -613,6 +615,7 @@ impl GpuCompositor {
             (None, Some(reason))
         };
         let strict_transition = if fx.is_some() {
+            let _device_scopes = crate::device_scope::lock();
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let stage = transition_catalog::TransitionCatalogStage::new(device, ACCUM_FORMAT);
             match poll_now(scope.pop()) {
@@ -1340,6 +1343,7 @@ impl GpuCompositor {
         size: (u32, u32),
         clear: bool,
     ) -> Result<(), GpuPlanError> {
+        let _device_scopes = crate::device_scope::lock();
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let groups = self.resident_layer_groups(encoder, layers, sources, size);
         let groups = match (groups, poll_now(scope.pop())) {

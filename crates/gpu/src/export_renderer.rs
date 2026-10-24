@@ -486,6 +486,7 @@ impl ExportRenderer {
         }
 
         let (accum, (width, height), mut encoder) = self.compositor.composite_resident_flat(plan, sources)?;
+        let _device_scopes = crate::device_scope::lock();
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let recorded = self.compositor.nv12_output.record_coded(&self.device, &mut encoder, &accum, &output, width, height, coded_width, coded_height);
         let output_layout = match (recorded, crate::poll_now(scope.pop())) {

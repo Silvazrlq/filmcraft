@@ -13,6 +13,7 @@ pub(crate) struct BlurDissolveStage {
 
 impl BlurDissolveStage {
     pub(crate) fn new(device: &wgpu::Device) -> Option<Self> {
+        let _device_scopes = crate::device_scope::lock();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blur-dissolve"),
