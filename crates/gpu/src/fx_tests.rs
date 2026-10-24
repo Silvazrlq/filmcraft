@@ -729,8 +729,9 @@ const MULTIPASS_TOLERANCE: f32 = EXACT;
 
 /// CPU oracle for each multipass route id. No route has one yet; each port adds its arm here.
 fn cpu_reference(id: &str, source: &filmcraft_render::Image) -> Option<filmcraft_render::Image> {
-    let _ = (id, source);
-    None
+    let e = filmcraft_render::gpufx_multipass::multipass_case(id)?;
+    let mut img = source.clone();
+    filmcraft_render::vfx::apply(&mut img, &e, &filmcraft_render::gpufx_multipass::multipass_cx()).then_some(img)
 }
 
 /// Every registered multipass route on the adapter against its CPU oracle, channel by channel.
@@ -746,7 +747,7 @@ fn multipass_routes_match_cpu_oracle_on_adapter() {
     let source = filmcraft_render::Image { w: w as usize, h: h as usize, px: px.clone() };
     let mut failures = Vec::new();
     for id in MULTIPASS_ROUTES {
-        let Some(route) = multipass_effect_for(id) else {
+        let Some(route) = multipass_effect_for(id, w, h) else {
             failures.push(format!("{id}: no MultipassEffect registered"));
             continue;
         };

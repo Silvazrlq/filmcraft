@@ -153,14 +153,57 @@ pub struct MultipassEffect {
     pub plan: MultipassPlan,
 }
 
-/// Builds the route for `id`, if one is registered. None until a port adds its arm.
-pub fn multipass_effect_for(id: &str) -> Option<MultipassEffect> {
-    let _ = id;
-    None
+/// The parameter set the parity harness measures for `id`, or None when `id` has no route.
+///
+/// Spacer's project default (400 px margins) shrinks the layer below half scale on a small frame.
+/// That is the CPU-only mip route, so the measured case uses small margins that stay on the GPU.
+pub fn multipass_case(id: &str) -> Option<filmcraft_project::EffectInstance> {
+    let mut e = filmcraft_project::find_effect(id)?.instance();
+    if id == "spacer" {
+        for key in ["left", "top", "right", "bottom", "radius"] {
+            if let Some(p) = e.params.get_mut(key) {
+                p.value = filmcraft_project::ParamValue::Float(6.0);
+            }
+        }
+        if let Some(p) = e.params.get_mut("uniform") {
+            p.value = filmcraft_project::ParamValue::Bool(false);
+        }
+    }
+    Some(e)
 }
 
-/// Routes that have a plan, kernel and CPU parity case. Empty until a port lands; the classifier in gpufx.rs still refuses every id.
-pub const MULTIPASS_ROUTES: &[&str] = &[];
+/// The evaluation context the harness uses: pixel scale 1, no project, a 10 s clip at 24 fps.
+pub fn multipass_cx() -> crate::effects::FxCtx<'static> {
+    static CLIP: crate::vfx::ClipTiming =
+        crate::vfx::ClipTiming { clip_seconds: 10.0, clip_offset: 0.0, frame_rate: 24.0, sequence_size: (67, 41), source_size: (67, 41) };
+    crate::effects::FxCtx {
+        t: filmcraft_time::Tick::ZERO,
+        px_scale: 1.0,
+        seconds: 0.0,
+        timecode: "",
+        clip_name: "",
+        project: None,
+        env: Some(&CLIP),
+        frame_rate: 24.0,
+        working: filmcraft_color::WorkingSpace::Rec709,
+    }
+}
+
+/// Builds the route for `id` on a `width` x `height` frame, if one is registered and applies to
+/// these parameters. None means the CPU renders the effect.
+pub fn multipass_effect_for(id: &str, width: u32, height: u32) -> Option<MultipassEffect> {
+    let e = multipass_case(id)?;
+    let cx = multipass_cx();
+    match id {
+        "roughen_edges" => crate::gpufx_roughen::roughen_effect(&e, &cx, width, height),
+        "spacer" => crate::gpufx_spacer::spacer_effect(&e, &cx, width, height),
+        _ => None,
+    }
+}
+
+/// Routes that have a plan, kernel and CPU parity case. The classifier in gpufx.rs still refuses
+/// every id here until the GPU parity is measured.
+pub const MULTIPASS_ROUTES: &[&str] = &["roughen_edges", "spacer"];
 
 #[cfg(test)]
 mod tests {
@@ -260,5 +303,15 @@ mod tests {
         let p = plan(vec![pass("k", &[0], 1)], 1);
         // 8K UHD is far above any fixed cap; the device, not this crate, decides
         assert_eq!(p.intermediate_bytes(7680, 4320), Ok(7680 * 4320 * 16));
+    }
+
+    #[test]
+    fn registered_routes_build_valid_plans_on_the_harness_frame() {
+        for id in MULTIPASS_ROUTES {
+            let route = multipass_effect_for(id, 67, 41).expect("registered route builds");
+            assert_eq!(route.id, *id);
+            assert!(route.plan.validate().is_ok(), "{id} plan");
+            assert!(route.plan.passes.iter().all(|p| route.kernels.contains(&p.kernel)), "{id} names a kernel it does not ship");
+        }
     }
 }

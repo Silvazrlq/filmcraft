@@ -4,9 +4,9 @@ Estado: **nenhum dos dois efeitos roda na GPU ainda.** Ambos estão em `UNMEASUR
 (`crates/render/src/gpufx.rs`), e o classificador recusa os dois. Este teste existe para medir a
 paridade antes de tirá-los da lista. Medir é pré-requisito, não formalidade.
 
-Não há caso de paridade específico para estes efeitos no branch ainda. A ligação ao runner e o
-harness genérico de paridade estão na thread da infra (`feat/gpu-multipass-route`). Quando ele
-chegar, os comandos abaixo passam a valer. Até lá, a seção 2 é o único teste que roda.
+Os dois efeitos estão registrados no harness genérico (`MULTIPASS_ROUTES` em
+`crates/render/src/gpufx_multipass.rs`; oráculo CPU em `crates/gpu/src/fx_tests.rs`, tolerância
+`EXACT`). A seção 3 é a medição. Sem GPU AMD ela falha por desenho; isso não é paridade.
 
 ## 1. Pré-requisitos
 
@@ -34,36 +34,45 @@ cargo test -p filmcraft-render -- hash_emul gpufx_roughen gpufx_spacer
 Critério: tudo verde. `noise_u64` valida os dois kernels com naga e não precisa de GPU.
 `hash_emul` prova bit a bit que o hash em u32 bate com `hash_u` (4M entradas).
 
-## 3. Paridade com GPU AMD (quando o harness genérico estiver no branch)
+## 3. Paridade com GPU AMD
 
 ```bash
-cargo test -p filmcraft-gpu fx_tests -- --nocapture
+cargo test -p filmcraft-gpu multipass_routes_match_cpu_oracle_on_adapter -- --nocapture
 ```
+
+Saída que importa: `roughen_edges: max rel diff ...` e `spacer: max rel diff ...`, com 0 valores
+acima de `EXACT`. Sem adaptador o teste para com `FX parity gate requires a GPU adapter`.
+Medição de referência, ainda não feita: nenhuma.
+
+Parâmetros medidos: os de `multipass_case` (roughen com os padrões do projeto; spacer com margens
+de 6 px e uniforme desligado, porque o padrão de 400 px cai no caminho de mip da CPU).
 
 A saída precisa mostrar `Required FX parity adapter: <nome> vendor=0x1002`. Sem GPU AMD, o teste
 falha de propósito. Qualquer outra GPU, ou nenhuma, é falha.
 
-Casos a verificar, quando existirem no harness:
+Cobertura atual: só um caso por efeito. Ainda não medido: `edge_type` 0..7, borda pequena e
+grande, stretch negativo, margens assimétricas, `fill` ligado, raio grande. Esses casos precisam de
+um harness com mais parâmetros; não estão cobertos.
 
-- `roughen_edges`: todos os `edge_type` (0..7), com borda pequena (≈ 0.5 px), média e grande;
-  stretch negativo e positivo; `sharpness` e `influence` nos extremos.
-- `spacer`: margens uniformes e assimétricas; escala acima de 1/2 (a única que vai para a GPU);
-  raio de canto grande; `fill` ligado e desligado.
-
-Critério de aceitação: diferença máxima por canal dentro da tolerância do harness. O blur do
-roughen é a soma de caixas em ordem diferente da CPU (janela deslizante no CPU, soma direta na
-GPU). A diferença esperada é de arredondamento em f32, não de algoritmo.
+Critério: diferença máxima por canal dentro de `EXACT`. Atenção: o blur do roughen soma caixas em
+ordem diferente da CPU (janela deslizante no CPU, soma direta na GPU). Pode haver diferença de
+arredondamento em f32 acima de `EXACT`. Se isso aparecer, a causa é a ordem da soma, não o
+algoritmo, e a tolerância precisa de decisão explícita.
 
 **Atenção:** a linha `skipping` não prova nada. Um teste que pula sem adaptador não mediu paridade.
 
 ## 4. Se a paridade passar
 
 1. Retirar `roughen_edges` e `spacer` de `UNMEASURED_GPU_ROUTES` em `crates/render/src/gpufx.rs`.
+   (O harness também exige que estejam na lista; `multipass_harness_refuses_ids_outside_unmeasured_list`
+   falha se alguém tirar sem medir.)
 2. Confirmar que o classificador passa a aceitá-los e que o teste de classificação continua verde.
 3. Registrar o resultado (GPU, driver, saída do teste) neste arquivo.
 
 ## 5. Riscos conhecidos, sem medição
 
+- **Tamanho do quadro fixo na montagem:** `multipass_effect_for(id, w, h)` recebe o tamanho; o
+  integrador do runner precisa passar o tamanho real do quadro, não o do harness.
 - **Custo do blur do roughen:** cada passe de caixa é O(r) por pixel; o CPU usa janela deslizante
   O(1). Com borda grande em 4K o passe pode estourar o limite de tempo do driver. Precisa de
   medição de tempo, não só de paridade.

@@ -209,6 +209,49 @@ pub fn roughen_plan(params: &RoughenParams, width: u32, height: u32) -> Multipas
     MultipassPlan { passes, result: Slot(4) }
 }
 
+/// Evaluates the effect instance at the context's time, as `vfx::stylize::roughen_edges` reads it.
+pub fn roughen_input(e: &filmcraft_project::EffectInstance, cx: &crate::effects::FxCtx) -> RoughenInput {
+    use crate::vfx::{chv, cv, fv, offv};
+    let off = offv(e, "offset", cx);
+    RoughenInput {
+        edge_type: chv(e, "edge_type"),
+        border: fv(e, "border", cx),
+        sharpness: fv(e, "sharpness", cx),
+        influence: fv(e, "influence", cx),
+        scale: fv(e, "scale", cx),
+        stretch: fv(e, "stretch", cx),
+        offset: [off.x as f32, off.y as f32],
+        complexity: fv(e, "complexity", cx),
+        evolution: fv(e, "evolution", cx),
+        seed: fv(e, "seed", cx),
+        edge_color: cv(e, "edge_color", cx),
+        px_scale: cx.px_scale,
+    }
+}
+
+/// WGSL of the roughen route: the u64 hash prepended to the kernels, as the kernels need it.
+fn roughen_wgsl() -> &'static str {
+    static SRC: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SRC.get_or_init(|| format!("{}\n{}", include_str!("../../gpu/src/noise_u64.wgsl"), include_str!("../../gpu/src/fx_roughen.wgsl"))).as_str()
+}
+
+/// The roughen route for `e` on a `width` x `height` frame. None when the effect does nothing
+/// (border below half a pixel) or a parameter cannot be used on the GPU; the CPU then renders it.
+pub fn roughen_effect(
+    e: &filmcraft_project::EffectInstance,
+    cx: &crate::effects::FxCtx,
+    width: u32,
+    height: u32,
+) -> Option<crate::gpufx_multipass::MultipassEffect> {
+    let params = roughen_params(&roughen_input(e, cx)).ok().flatten()?;
+    Some(crate::gpufx_multipass::MultipassEffect {
+        id: "roughen_edges",
+        wgsl: roughen_wgsl(),
+        kernels: &["cs_roughen_box", "cs_roughen_apply"],
+        plan: roughen_plan(&params, width, height),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

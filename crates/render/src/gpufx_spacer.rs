@@ -169,6 +169,30 @@ fn bilinear<F: Fn(u32, u32) -> [f32; 4]>(src: &F, w: u32, h: u32, u: f32, v: f32
     out
 }
 
+/// The spacer route for `e` on a `width` x `height` frame, or None when the CPU must render it
+/// (scale at or below one half: the mip pre-filter route, or invalid parameters).
+pub fn spacer_effect(
+    e: &filmcraft_project::EffectInstance,
+    cx: &crate::effects::FxCtx,
+    width: u32,
+    height: u32,
+) -> Option<crate::gpufx_multipass::MultipassEffect> {
+    use crate::vfx::{bv, cv, fv, lin};
+    let k = f64::from(cx.px_scale);
+    let side = |id: &str| f64::from(fv(e, id, cx)) * k;
+    let fill = bv(e, "fill").then(|| lin(cv(e, "color", cx)));
+    let params = spacer_params(width, height, side("left"), side("top"), side("right"), side("bottom"), bv(e, "uniform"), side("radius"), fill)?;
+    if !params.gpu_route_ok() {
+        return None;
+    }
+    Some(crate::gpufx_multipass::MultipassEffect {
+        id: "spacer",
+        wgsl: include_str!("../../gpu/src/fx_spacer.wgsl"),
+        kernels: &[SPACER_KERNEL],
+        plan: spacer_plan(&params),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
