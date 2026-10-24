@@ -861,6 +861,48 @@ fn roughen_edges_stages_match_cpu_on_adapter() {
     assert!(first_bad.is_none(), "roughen_edges first divergent stage: {}", first_bad.unwrap_or_default());
 }
 
+/// Localises the roughen apply divergence: the probe kernel writes fbm, depth and coordinates per pixel
+/// after the six box passes. Each intermediate is checked against its CPU value and the first pixel out
+/// of tolerance is printed. Run on the AMD with `--nocapture`.
+#[test]
+fn roughen_edges_probe_localises_apply_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{roughen_input, roughen_noise_reference, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let cx = multipass_cx();
+    let params = roughen_params(&roughen_input(&e, &cx)).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("probe route");
+    let (scale, stretch) = (params.scale_px, params.stretch);
+    let mut first: Option<String> = None;
+    let mut worst_noise = 0f32;
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let i = (y * w as usize + x) * 4;
+            let (gn, gd, gcu, gcv) = (gpu[i], gpu[i + 1], gpu[i + 2], gpu[i + 3]);
+            let ecu = (x as f32 + params.offset_x) / (scale * stretch);
+            let ecv = (y as f32 + params.offset_y) * stretch / scale;
+            let en = roughen_noise_reference(ecu, ecv, params.evolution, params.complexity, params.seed);
+            let d = (gn - en).abs();
+            worst_noise = worst_noise.max(if d.is_nan() { f32::INFINITY } else { d });
+            if first.is_none() && (d.is_nan() || d > EXACT || (gcu - ecu).abs() > EXACT || (gcv - ecv).abs() > EXACT) {
+                first = Some(format!("texel ({x},{y}): cu gpu {gcu} cpu {ecu}, cv gpu {gcv} cpu {ecv}, fbm gpu {gn} cpu {en}, depth gpu {gd}"));
+            }
+        }
+    }
+    eprintln!("probe: worst fbm diff {worst_noise:.3e}; first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
+    assert!(first.is_none(), "roughen apply: first divergence {}", first.unwrap_or_default());
+}
+
 /// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {

@@ -336,6 +336,11 @@ mod tests {
     }
 }
 
+/// CPU fBm of the apply, for the probe: the value the kernel's `fbm` must reproduce.
+pub fn roughen_noise_reference(x: f32, y: f32, z: f32, octaves: f32, seed: u64) -> f32 {
+    crate::vfx::fbm(x, y, z, octaves, seed)
+}
+
 /// Measurement oracle for the AMD stage test: the depth plane after each of the six box passes of
 /// the plan, in plan order (horizontal radii, then vertical), starting from `alpha` (`w` x `h`).
 /// Each stage is a plane of `w * h` values in row-major order.

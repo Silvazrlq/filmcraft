@@ -224,3 +224,23 @@ fn cs_roughen_apply(@builtin(global_invocation_id) id: vec3<u32>) {
 
     textureStore(output, texel, vec4<f32>(rgb * k, src.a * k));
 }
+
+// Measurement probe (not a route): the apply's intermediates per pixel, for localising a divergence.
+// Writes r = fbm before the edge-type remap, g = depth, b = cu, a = cv. Same bindings as the apply.
+@compute @workgroup_size(8, 8, 1)
+fn cs_roughen_probe(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(output);
+    if (id.x >= size.x || id.y >= size.y) {
+        return;
+    }
+    let texel = vec2<i32>(id.xy);
+    let d = textureLoad(input1, texel, 0).r;
+    let scale = pf(3u);
+    let stretch = pf(4u);
+    let off = vec2<f32>(pf(5u), pf(6u));
+    let px = vec2<f32>(f32(texel.x), f32(texel.y));
+    let cu = (px.x + off.x) / (scale * stretch);
+    let cv = (px.y + off.y) * stretch / scale;
+    let n = fbm(cu, cv, pf(8u), pf(7u), U64(pword(13u), pword(12u)));
+    textureStore(output, texel, vec4<f32>(n, d, cu, cv));
+}
