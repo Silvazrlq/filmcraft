@@ -23,6 +23,19 @@ mod tests {
             .expect("noise_u64.wgsl validates");
     }
 
+    /// Every hash constant in the WGSL is the CPU's `vfx::hash_u` constant, split into halves. A wrong
+    /// digit only shows on the GPU, so this runs without one. Regression: the z and seed multipliers
+    /// had a digit wrong (0x166567B1 / 0x166567C5 instead of 0x165667B1 / 0x165667C5).
+    #[test]
+    fn noise_u64_constants_match_cpu_hash() {
+        let consts =
+            [0x9E37_79B9_7F4A_7C15u64, 0xC2B2_AE3D_27D4_EB4F, 0x1656_67B1_9E37_79F9, 0x27D4_EB2F_1656_67C5, 0xBF58_476D_1CE4_E5B9, 0x94D0_49BB_1331_11EB];
+        for c in consts {
+            let pair = format!("U64(0x{:08X}u, 0x{:08X}u)", c >> 32, c & 0xffff_ffff);
+            assert!(NOISE_U64_WGSL.contains(&pair), "noise_u64.wgsl lacks the CPU constant {pair}");
+        }
+    }
+
     /// Validates one kernel module: `source` (with its own bindings) must parse and validate.
     fn validate(source: &str) -> Result<(), String> {
         let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
