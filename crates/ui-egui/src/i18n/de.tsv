@@ -3616,7 +3616,6 @@
 	Export via CPU (manual)	Export über CPU (manuell)
 	Off: GPU export (AMD GPU + same-node VA-API required; fails if unavailable). On: CPU reference renderer.	Aus: GPU-Export (AMD-GPU und VA-API auf demselben Knoten erforderlich; schlägt fehl, wenn nicht verfügbar). Ein: CPU-Referenzrenderer.
 	This format exports only via CPU	Dieses Format wird nur über die CPU exportiert
-	Based on FilmCraft by the ArtCraft team. Modified local build.	Basierend auf FilmCraft vom ArtCraft-Team. Lokal geänderte Build-Version.
 	CPU compositing explicitly enabled	CPU-Compositing ausdrücklich aktiviert
 	Export preview unavailable in GPU-only mode; CPU fallback is disabled	Exportvorschau im reinen GPU-Modus nicht verfügbar; CPU-Ausweichlösung ist deaktiviert
 	GPU channel display is unsupported; CPU fallback is disabled	Anzeige der GPU-Kanäle wird nicht unterstützt; CPU-Ausweichlösung ist deaktiviert

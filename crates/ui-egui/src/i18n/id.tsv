@@ -3585,7 +3585,6 @@
 	Export via CPU (manual)	Ekspor melalui CPU (manual)
 	Off: GPU export (AMD GPU + same-node VA-API required; fails if unavailable). On: CPU reference renderer.	Nonaktif: ekspor GPU (memerlukan GPU AMD dan VA-API pada node yang sama; gagal jika tidak tersedia). Aktif: perender referensi CPU.
 	This format exports only via CPU	Format ini hanya diekspor melalui CPU
-	Based on FilmCraft by the ArtCraft team. Modified local build.	Berdasarkan FilmCraft oleh tim ArtCraft. Build lokal yang dimodifikasi.
 	CPU compositing explicitly enabled	Komposisi CPU diaktifkan secara eksplisit
 	Export preview unavailable in GPU-only mode; CPU fallback is disabled	Pratinjau ekspor tidak tersedia dalam mode khusus GPU; fallback CPU dinonaktifkan
 	GPU channel display is unsupported; CPU fallback is disabled	Tampilan kanal GPU tidak didukung; fallback CPU dinonaktifkan
