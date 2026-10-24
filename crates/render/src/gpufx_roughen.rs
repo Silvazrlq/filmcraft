@@ -166,8 +166,9 @@ impl RoughenParams {
             };
         }
         let mut out = [0u8; UNIFORM_BYTES];
-        for (dst, word) in out.chunks_exact_mut(4).zip(words) {
-            dst.copy_from_slice(&word.to_le_bytes());
+        let (chunks, _) = out.as_chunks_mut::<4>();
+        for (dst, word) in chunks.iter_mut().zip(words) {
+            *dst = word.to_le_bytes();
         }
         out
     }
