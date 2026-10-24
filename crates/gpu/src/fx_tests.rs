@@ -813,6 +813,54 @@ fn roughen_edges_stage_checksums_on_adapter() {
     }
 }
 
+/// Stage-by-stage parity of roughen_edges on the adapter. Stages 1..=6 are the depth after each box
+/// pass (red channel) against the CPU replica `depth_stages`; stage 7 is the full route against the
+/// CPU oracle, all four channels. Every stage is reported; the test then fails naming the first stage
+/// that is out of tolerance, with its worst relative error and the index of the worst value.
+#[test]
+fn roughen_edges_stages_match_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{depth_stages, roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let route = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect at the case parameters");
+    let alpha: Vec<f32> = px.chunks(4).map(|p| p[3]).collect();
+    let cpu_depth = depth_stages(&alpha, w as usize, h as usize, params.sigma);
+    let relative = |a: f32, b: f32| (a - b).abs() / (1.0 + a.abs());
+    let mut report = Vec::new();
+    let mut first_bad: Option<String> = None;
+    for stage in 1..=cpu_depth.len() {
+        let slot = route.plan.passes.get(stage - 1).map(|p| p.output).expect("stage is in the plan");
+        let gpu = super::fx_multipass::measure_route_until(&dev, &q, &route, &px, (w, h), stage, slot).expect("stage measurement");
+        let cpu = &cpu_depth[stage - 1];
+        let (worst, at) = (0..cpu.len()).fold((0f32, 0usize), |(m, at), i| {
+            let d = relative(cpu[i], gpu[i * 4]);
+            let d = if d.is_nan() { f32::INFINITY } else { d };
+            if d > m { (d, i) } else { (m, at) }
+        });
+        report.push(format!("stage {stage} (box pass {stage}, slot {}): worst {worst:.3e} at texel {at}", slot.0));
+        if worst > EXACT && first_bad.is_none() {
+            first_bad = Some(format!("stage {stage}: worst {worst:.3e} at texel {at} (cpu {}, gpu {})", cpu[at], gpu[at * 4]));
+        }
+    }
+    let gpu = measure_route(&dev, &q, &route, &px, (w, h)).expect("full route");
+    let expected = cpu_reference("roughen_edges", &filmcraft_render::Image { w: w as usize, h: h as usize, px: px.clone() }).expect("CPU oracle");
+    let (worst, at) = gpu.iter().zip(&expected.px).enumerate().fold((0f32, 0usize), |(m, at), (i, (&g, &c))| {
+        let d = relative(c, g);
+        let d = if d.is_nan() { f32::INFINITY } else { d };
+        if d > m { (d, i) } else { (m, at) }
+    });
+    report.push(format!("stage {} (full apply): worst {worst:.3e} at value {at}", cpu_depth.len() + 1));
+    if worst > EXACT && first_bad.is_none() {
+        first_bad = Some(format!("stage {} (apply): worst {worst:.3e} at value {at} (cpu {}, gpu {})", cpu_depth.len() + 1, expected.px[at], gpu[at]));
+    }
+    eprintln!("{}", report.join("\n"));
+    assert!(first_bad.is_none(), "roughen_edges first divergent stage: {}", first_bad.unwrap_or_default());
+}
+
 /// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {

@@ -336,38 +336,44 @@ mod tests {
     }
 }
 
+/// Measurement oracle for the AMD stage test: the depth plane after each of the six box passes of
+/// the plan, in plan order (horizontal radii, then vertical), starting from `alpha` (`w` x `h`).
+/// Each stage is a plane of `w * h` values in row-major order.
+pub fn depth_stages(alpha: &[f32], width: usize, height: usize, sigma: f32) -> Vec<Vec<f32>> {
+    let (rx, ry) = crate::effects::gaussian_boxes(width, height, sigma, sigma);
+    let radii: Vec<(u32, bool)> = rx.iter().map(|&r| (r, true)).chain(ry.iter().map(|&r| (r, false))).collect();
+    let mut stages = Vec::with_capacity(radii.len());
+    let mut plane = alpha.to_vec();
+    for (r, horizontal) in radii {
+        plane = box_pass(&plane, width, height, r as usize, horizontal);
+        stages.push(plane.clone());
+    }
+    stages
+}
+
+/// Replica of `cs_roughen_box`: mean of 2r+1 taps, zero outside the plane, along one axis.
+fn box_pass(plane: &[f32], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<f32> {
+    let mut out = vec![0f32; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = 0f32;
+            for t in 0..=2 * r {
+                let o = t as isize - r as isize;
+                let (qx, qy) = if horizontal { (x as isize + o, y as isize) } else { (x as isize, y as isize + o) };
+                if qx >= 0 && qy >= 0 && (qx as usize) < w && (qy as usize) < h {
+                    acc += plane[qy as usize * w + qx as usize];
+                }
+            }
+            out[y * w + x] = acc / (2 * r + 1) as f32;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod kernel_semantics_tests {
-    /// Replica of `cs_roughen_box`: mean of 2r+1 taps, zero outside, one axis.
-    fn box_pass(plane: &[f32], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<f32> {
-        let mut out = vec![0f32; w * h];
-        for y in 0..h {
-            for x in 0..w {
-                let mut acc = 0f32;
-                for t in 0..=2 * r {
-                    let o = t as isize - r as isize;
-                    let (qx, qy) = if horizontal { (x as isize + o, y as isize) } else { (x as isize, y as isize + o) };
-                    if qx >= 0 && qy >= 0 && (qx as usize) < w && (qy as usize) < h {
-                        acc += plane[qy as usize * w + qx as usize];
-                    }
-                }
-                out[y * w + x] = acc / (2 * r + 1) as f32;
-            }
-        }
-        out
-    }
-
-    /// The six box passes in the plan's order, as the GPU runs them.
     fn kernel_depth(alpha: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
-        let (rx, ry) = crate::effects::gaussian_boxes(w, h, sigma, sigma);
-        let mut plane = alpha.to_vec();
-        for &r in &rx {
-            plane = box_pass(&plane, w, h, r as usize, true);
-        }
-        for &r in &ry {
-            plane = box_pass(&plane, w, h, r as usize, false);
-        }
-        plane
+        super::depth_stages(alpha, w, h, sigma).pop().unwrap_or_default()
     }
 
     #[test]

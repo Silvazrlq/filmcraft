@@ -64,6 +64,17 @@ Harness geral (os cinco ids, mesma tolerância `EXACT` = 1e-4):
 cargo test -p filmcraft-gpu multipass_routes_match_cpu_oracle_on_adapter -- --nocapture
 ```
 
+Roughen por etapas (diagnóstico de divergência; falha nomeando a primeira etapa fora de `EXACT`):
+
+```bash
+cargo test -p filmcraft-gpu roughen_edges_stages_match_cpu_on_adapter -- --nocapture
+```
+
+Imprime uma linha por etapa: as seis passadas de caixa (canal vermelho contra `depth_stages`, a
+réplica CPU da profundidade) e a etapa final (apply, todos os canais contra o oráculo CPU), com o erro
+máximo e o índice do pior valor. Não há etapa de fbm separada: o ruído é calculado dentro do apply, então
+ele só aparece como diferença na etapa final.
+
 Testes específicos de VR (já existiam):
 
 ```bash
