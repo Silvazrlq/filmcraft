@@ -917,8 +917,10 @@ fn run_job(sh: &Shared, job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Ser
                         let (plan, pv) = match plan_job(job, seq, pool, services) {
                             Ok(result) => result,
                             Err(error) => {
-                                sh.plans.lock().unwrap_or_else(|e| e.into_inner()).insert_error(job.key, error.to_string());
-                                loading = false;
+                                loading = filmcraft_media::pending::take();
+                                if !job.cancel.load(Ordering::Relaxed) && !loading {
+                                    sh.plans.lock().unwrap_or_else(|e| e.into_inner()).insert_error(job.key, error.to_string());
+                                }
                                 return false;
                             }
                         };
