@@ -32,11 +32,7 @@ impl U64 {
 
     /// Logical right shift for `0 < n <= 32` (the shader only uses 29, 31 and 32).
     pub(crate) fn shr(self, n: u32) -> U64 {
-        if n >= 32 {
-            U64 { hi: 0, lo: self.hi >> (n - 32) }
-        } else {
-            U64 { hi: self.hi >> n, lo: (self.lo >> n) | (self.hi << (32 - n)) }
-        }
+        if n >= 32 { U64 { hi: 0, lo: self.hi >> (n - 32) } } else { U64 { hi: self.hi >> n, lo: (self.lo >> n) | (self.hi << (32 - n)) } }
     }
 
     /// Wrapping 64-bit multiply, built from 32-bit products.
