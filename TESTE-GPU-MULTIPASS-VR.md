@@ -1,28 +1,31 @@
 # Teste GPU de vários passes: vr_blur, vr_sharpen, vr_denoise
 
-Status: **não medido**. Os três ids estão em `UNMEASURED_GPU_ROUTES` (`crates/render/src/gpufx.rs`) e o classificador (`evaluate_gpu_effect`) os recusa. Continuam na CPU. Nenhum caso de paridade GPU existe ainda, então nada aqui prova paridade.
+Status: **não medido**. Os três ids estão em `UNMEASURED_GPU_ROUTES` (`crates/render/src/gpufx.rs`) e `evaluate_gpu_effect` os recusa. Seguem na CPU. Nada aqui prova paridade GPU.
 
-## O que já é verificado sem GPU
+## O que existe
+
+- `vfx::immersive::vr_plan(VrKind, layout, w, h)`: plano `MultipassPlan` com parâmetros por passe (`Pass.params`). Kernels: `vr_blur_row` (3 passes de caixa por linha, com wrap), `vr_box_col` (passes verticais com repeat), `vr_copy`, `vr_sharpen_combine`, `vr_denoise_combine`.
+- `crates/gpu/src/vr.wgsl`: os kernels acima, no contrato de bindings (0, 1 entradas; 2 saída; 3 uniform de parâmetros).
+- `row_radius`, `box_row_wrap`, `blur_row_wrap` são a especificação CPU dos kernels.
+
+## Verificado sem GPU
 
 ```
-cargo test -p filmcraft-gpu --lib -- vr_wgsl_validates
-cargo test -p filmcraft-render --lib -- row_tests vr_
+cargo test -p filmcraft-render --lib -- row_tests
 cargo test -p filmcraft-render --lib -- unmeasured_routes_are_never_in_the_gpu_allowlist
+cargo test -p filmcraft-gpu --lib -- vr_
 ```
 
-- `vr_wgsl_validates`: `crates/gpu/src/vr.wgsl` faz parse e validação com naga. Não prova que o kernel calcula o mesmo que a CPU.
-- `row_radius`, `blur_row_wrap` e `blur_rows_wrap` (render, `vfx::immersive::row_tests`): testes próprios, não cobertos pelo filtro `vr_`.
-- `vr_*` (render): oráculos CPU de VR (chromatic, color gradients, projeção, esfera) e rotação. Não exercitam o caminho de blur refatorado.
-- `unmeasured_routes_are_never_in_the_gpu_allowlist`: os três ids não são elegíveis.
+- `row_tests::vr_plans_match_the_cpu_reference_for_every_layout`: executa cada plano com a semântica dos kernels na CPU e compara com a referência CPU por vista (layouts 0, 1, 2; tamanhos 16×8 e 9×7; blur, sharpen, denoise, denoise com show). Isso prova a montagem do plano e a matemática, não o shader.
+- `vr_wgsl_validates`: naga valida `vr.wgsl`. `vr_wgsl_exposes_every_plan_kernel`: os nomes batem com o plano.
 
 ## Pendente antes de medir na AMD
 
-1. Contrato de bindings: `crates/gpu/src/fx_multipass.wgsl` tem só as entradas 0–2. Os kernels VR precisam de um uniform com raio, retângulo da vista, `sigma`, `amount`, `threshold` e `show`. Sem isso, nenhum passo roda.
-2. Caso de paridade em `crates/gpu/src/fx_tests.rs` para cada id. Só depois disso dá para medir.
-3. Medição na AMD (VA-API/Vulkan), com o caso de paridade rodando de fato:
+1. Caso de paridade GPU para cada id, pelo harness genérico que a thread da infra (`feat/gpu-multipass-route`) publica. Depois de ligar os ids a esse caminho, eles saem de `UNMEASURED_GPU_ROUTES` só após medição.
+2. Medição na AMD:
 
 ```
 CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test -p filmcraft-gpu --lib -- --nocapture vr_
 ```
 
-Critério: o caso não pode aparecer como `skipping`. Se o device não existir, o teste falha ou não conta.
+`fx_tests::gpu_vr_effects_report_pixel_deltas_against_independent_and_typed_cpu` (da infra) exige adaptador AMD. Sem AMD ele falha; isso não é paridade. Não conta como passou.

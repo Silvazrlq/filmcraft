@@ -18,6 +18,7 @@ mod distort;
 pub(crate) use distort::{Plane3d, Rotate3d, camera_shake_place, rotate_3d_plane, warp_plane, wiggle_place};
 mod immersive;
 mod lights;
+pub use immersive::{VR_KERNEL_COL, VR_KERNEL_COPY, VR_KERNEL_DENOISE, VR_KERNEL_ROW, VR_KERNEL_SHARPEN, VrKind, vr_plan};
 pub(crate) use lights::{LensFlareParams, lens_flare_add, lens_flare_params};
 mod stylize;
 mod temporal;

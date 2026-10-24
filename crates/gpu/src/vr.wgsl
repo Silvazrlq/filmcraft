@@ -1,51 +1,35 @@
-// FilmCraft GPU immersive-video (VR) kernels: the equirectangular blur, sharpen and denoise of
-// `filmcraft_render::vfx::immersive`. The math mirrors `row_radius`, `blur_row_wrap` and the
-// `vr_sharpen` / `vr_denoise` branches of `apply` operation by operation; the CPU code is the spec.
-// Each view (the whole frame or one eye) is a full sphere: x wraps, and the view is addressed by
-// (view_x, view_y) inside the full-size working textures.
+// FilmCraft GPU immersive-video (VR) kernels: the equirectangular blur, copy, sharpen and denoise
+// of `filmcraft_render::vfx::immersive`, run as passes of `filmcraft_render::gpufx_multipass`.
+// The math mirrors `row_radius`, `blur_row_wrap`, `box_rows` (repeat edge) and the `vr_sharpen` /
+// `vr_denoise` branches of `apply`; the CPU code is the spec. Kernel contract: see fx_multipass.wgsl
+// (bindings 0 and 1 are the inputs, 2 the output, 3 the parameter block of the pass).
 //
-// The vertical Gaussian of `vr_blur_image` is not here: the caller runs `gaussian` for it.
+// Parameter block, u32 words (floats as bit patterns):
+//   row blur:      [view_x, view_y, view_w, view_h, sigma]
+//   column box:    [view_x, view_y, view_w, view_h, radius]
+//   copy:          [view_x, view_y, view_w, view_h]
+//   sharpen:       [view_x, view_y, view_w, view_h, amount, 0, 0]
+//   denoise:       [view_x, view_y, view_w, view_h, 0, show, threshold]
+// A view is addressed inside the full-size slots: (view_x, view_y) is its top-left texel.
 
-// One box pass along each row. Pass k reads the output of pass k-1 (ping-pong), so the caller
-// dispatches three times and skips all of them when sigma <= 0.3 (`vr_blur_image` returns early).
-struct VrParams {
-    view_x: u32,
-    view_y: u32,
-    vw: u32,
-    vh: u32,
-    sigma: f32,
-    pass_index: u32,  // informative only
-    _pad0: u32,
-    _pad1: u32,
-};
+@group(0) @binding(0) var input0: texture_2d<f32>;
+@group(0) @binding(1) var input1: texture_2d<f32>;
+@group(0) @binding(2) var output: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var<uniform> params: array<vec4<u32>, 8>;
 
-// Sharpen and denoise: `amount` is already divided by 100; `threshold` is the denoise threshold.
-struct CombineParams {
-    view_x: u32,
-    view_y: u32,
-    vw: u32,
-    vh: u32,
-    amount: f32,
-    show: u32,
-    threshold: f32,
-    _pad: u32,
-};
+fn pu(i: u32) -> u32 {
+    return params[i >> 2u][i & 3u];
+}
 
-@group(0) @binding(0) var<uniform> blur_p: VrParams;
-@group(0) @binding(1) var blur_src: texture_2d<f32>;
-@group(0) @binding(2) var blur_dst: texture_storage_2d<rgba32float, write>;
-
-@group(0) @binding(3) var<uniform> comb_p: CombineParams;
-// The original view (`orig`) and the blurred copy of it (`blur`).
-@group(0) @binding(4) var orig: texture_2d<f32>;
-@group(0) @binding(5) var blurred: texture_2d<f32>;
-@group(0) @binding(6) var comb_dst: texture_storage_2d<rgba32float, write>;
+fn pf(i: u32) -> f32 {
+    return bitcast<f32>(pu(i));
+}
 
 // No PI constant in WGSL; this is pi rounded to f32.
 const PI: f32 = 3.1415927;
 
-// `row_radius`: the box radius of row y. Rounding is floor(x + 0.5) (as in Rust). The Rust
-// `min(cap).max(0)` order is kept as `min(max(f, 1), cap)`: `clamp` would be wrong when cap < 1.
+// `row_radius`: the box radius of row y of a view h rows high and w wide. Rounding is floor(x + 0.5)
+// as in Rust; `min(max(f, 1), cap)` keeps the Rust order (`clamp` would be wrong when cap < 1).
 fn row_radius(sigma: f32, w: u32, h: u32, y: u32) -> u32 {
     let lat = (0.5 - (f32(y) + 0.5) / f32(h)) * PI;
     let s = min(sigma / max(cos(lat), 1e-3), f32(w) / 4.0);
@@ -57,88 +41,122 @@ fn row_radius(sigma: f32, w: u32, h: u32, y: u32) -> u32 {
     return u32(min(max(f, 1.0), cap));
 }
 
-// `rem_euclid` for a positive modulus.
 fn wrap_x(a: i32, n: i32) -> i32 {
     return ((a % n) + n) % n;
 }
 
-@compute @workgroup_size(64)
-fn vr_blur_row(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let y = gid.x;
-    let w = blur_p.vw;
-    let h = blur_p.vh;
-    if y >= h || w == 0u {
+// One row per invocation (x = 0 only): a row blur pass of `blur_row_wrap`. The copy when the
+// radius is 0 keeps the ping-pong chain exact.
+@compute @workgroup_size(8, 8, 1)
+fn vr_blur_row(@builtin(global_invocation_id) id: vec3<u32>) {
+    let vw = pu(2u);
+    let vh = pu(3u);
+    let y = id.y;
+    if id.x != 0u || y >= vh || vw == 0u {
         return;
     }
-    // vr_blur_image's early return: no blur at all for sigma <= 0.3 (the radius alone would not
-    // catch it near the poles, where sigma / cos is larger).
+    let x0 = i32(pu(0u));
+    let row_y = i32(pu(1u)) + i32(y);
+    let ww = i32(vw);
     var r = 0u;
-    if blur_p.sigma > 0.3 {
-        r = row_radius(blur_p.sigma, w, h, y);
+    let sigma = pf(4u);
+    if sigma > 0.3 {
+        r = row_radius(sigma, vw, vh, y);
     }
-    let row_y = i32(blur_p.view_y + y);
-    let x0 = i32(blur_p.view_x);
-    let ww = i32(w);
-
     if r == 0u {
-        // a copy keeps the ping-pong chain exact
         for (var x = 0; x < ww; x = x + 1) {
             let c = vec2<i32>(x0 + x, row_y);
-            textureStore(blur_dst, c, textureLoad(blur_src, c, 0));
+            textureStore(output, c, textureLoad(input0, c, 0));
         }
         return;
     }
-
     let ri = i32(r);
     let inv = 1.0 / f32(2 * ri + 1);
-    // initial window: j = -r..=r with wrap-around
+    // one box pass with wrap-around; the plan runs three of them, each reading the last one's output
     var acc = vec4<f32>(0.0);
     for (var j = -ri; j <= ri; j = j + 1) {
-        let i = wrap_x(j, ww);
-        acc = acc + textureLoad(blur_src, vec2<i32>(x0 + i, row_y), 0);
+        acc = acc + textureLoad(input0, vec2<i32>(x0 + wrap_x(j, ww), row_y), 0);
     }
     for (var x = 0; x < ww; x = x + 1) {
-        textureStore(blur_dst, vec2<i32>(x0 + x, row_y), acc * inv);
-        let out_i = wrap_x(x - ri, ww);
-        let in_i = wrap_x(x + ri + 1, ww);
-        let v_in = textureLoad(blur_src, vec2<i32>(x0 + in_i, row_y), 0);
-        let v_out = textureLoad(blur_src, vec2<i32>(x0 + out_i, row_y), 0);
+        textureStore(output, vec2<i32>(x0 + x, row_y), acc * inv);
+        let v_in = textureLoad(input0, vec2<i32>(x0 + wrap_x(x + ri + 1, ww), row_y), 0);
+        let v_out = textureLoad(input0, vec2<i32>(x0 + wrap_x(x - ri, ww), row_y), 0);
         acc = acc + (v_in - v_out);
     }
 }
 
-@compute @workgroup_size(8, 8)
-fn vr_sharpen_combine(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= comb_p.vw || gid.y >= comb_p.vh {
+// One column per invocation: a vertical box pass with repeat edge (`box_rows`, repeat = true).
+@compute @workgroup_size(8, 8, 1)
+fn vr_box_col(@builtin(global_invocation_id) id: vec3<u32>) {
+    let vw = pu(2u);
+    let vh = pu(3u);
+    let x = id.x;
+    if x >= vw || id.y != 0u || vh == 0u {
         return;
     }
-    let c = vec2<i32>(i32(comb_p.view_x + gid.x), i32(comb_p.view_y + gid.y));
-    let p = textureLoad(orig, c, 0);
-    let q = textureLoad(blurred, c, 0);
-    // alpha is left as it is
-    let rgb = max(p.rgb + (p.rgb - q.rgb) * comb_p.amount, vec3<f32>(0.0));
-    textureStore(comb_dst, c, vec4<f32>(rgb, p.a));
+    let r = i32(pu(4u));
+    let inv = 1.0 / f32(2 * r + 1);
+    let col_x = i32(pu(0u)) + i32(x);
+    let y0 = i32(pu(1u));
+    let hh = i32(vh);
+    for (var y = 0; y < hh; y = y + 1) {
+        var acc = vec4<f32>(0.0);
+        for (var j = -r; j <= r; j = j + 1) {
+            let yy = clamp(y + j, 0, hh - 1);
+            acc = acc + textureLoad(input0, vec2<i32>(col_x, y0 + yy), 0);
+        }
+        textureStore(output, vec2<i32>(col_x, y0 + y), acc * inv);
+    }
 }
 
-@compute @workgroup_size(8, 8)
-fn vr_denoise_combine(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= comb_p.vw || gid.y >= comb_p.vh {
+// Copies the view (the result of a blur-only route).
+@compute @workgroup_size(8, 8, 1)
+fn vr_copy(@builtin(global_invocation_id) id: vec3<u32>) {
+    let vw = pu(2u);
+    let vh = pu(3u);
+    if id.x >= vw || id.y >= vh {
         return;
     }
-    let c = vec2<i32>(i32(comb_p.view_x + gid.x), i32(comb_p.view_y + gid.y));
-    let p = textureLoad(orig, c, 0);
-    let q = textureLoad(blurred, c, 0);
-    // weight falls off with the largest colour difference (RGB only)
+    let c = vec2<i32>(i32(pu(0u) + id.x), i32(pu(1u) + id.y));
+    textureStore(output, c, textureLoad(input0, c, 0));
+}
+
+// Sharpen: input0 is the original, input1 the blurred view. Alpha is left as it is.
+@compute @workgroup_size(8, 8, 1)
+fn vr_sharpen_combine(@builtin(global_invocation_id) id: vec3<u32>) {
+    let vw = pu(2u);
+    let vh = pu(3u);
+    if id.x >= vw || id.y >= vh {
+        return;
+    }
+    let c = vec2<i32>(i32(pu(0u) + id.x), i32(pu(1u) + id.y));
+    let p = textureLoad(input0, c, 0);
+    let q = textureLoad(input1, c, 0);
+    let amount = pf(4u);
+    let rgb = max(p.rgb + (p.rgb - q.rgb) * amount, vec3<f32>(0.0));
+    textureStore(output, c, vec4<f32>(rgb, p.a));
+}
+
+// Denoise: the blend weight falls off with the largest RGB difference to the blurred view.
+@compute @workgroup_size(8, 8, 1)
+fn vr_denoise_combine(@builtin(global_invocation_id) id: vec3<u32>) {
+    let vw = pu(2u);
+    let vh = pu(3u);
+    if id.x >= vw || id.y >= vh {
+        return;
+    }
+    let c = vec2<i32>(i32(pu(0u) + id.x), i32(pu(1u) + id.y));
+    let p = textureLoad(input0, c, 0);
+    let q = textureLoad(input1, c, 0);
     let d = max(max(abs(p.r - q.r), abs(p.g - q.g)), abs(p.b - q.b));
-    // the CPU keeps thr >= 0.02; the floor only stops a zero threshold from giving 0/0
-    let thr = max(comb_p.threshold, 1e-6);
+    // the CPU keeps threshold >= 0.02; the floor only stops a zero threshold from giving 0/0
+    let thr = max(pf(6u), 1e-6);
     let k = exp(-(d * d) / (thr * thr));
     let o = p + (q - p) * k;
-    if comb_p.show == 1u {
-        // the noise view: the output alpha is the original alpha (p.a is not overwritten)
+    if pu(5u) == 1u {
         let rgb = max((p.rgb - o.rgb) * 4.0 + vec3<f32>(0.18), vec3<f32>(0.0)) * p.a;
-        textureStore(comb_dst, c, vec4<f32>(rgb, p.a));
+        textureStore(output, c, vec4<f32>(rgb, p.a));
     } else {
-        textureStore(comb_dst, c, o);
+        textureStore(output, c, o);
     }
 }
