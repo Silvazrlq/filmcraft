@@ -5,6 +5,8 @@
 @group(0) @binding(0) var input0: texture_2d<f32>;
 @group(0) @binding(1) var input1: texture_2d<f32>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba32float, write>;
+// Binding 3: the pass parameter block, zero-padded to 16 bytes, at most 128 bytes (MAX_PARAM_BYTES).
+@group(0) @binding(3) var<uniform> params: array<vec4<u32>, 8>;
 
 // Identity pass: copies input0 to the output. Used to prove the chain, the pool and the bindings.
 @compute @workgroup_size(8, 8, 1)
