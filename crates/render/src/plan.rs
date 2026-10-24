@@ -457,7 +457,9 @@ fn preflight_sequence(
         let mut steps = Vec::new();
         for track in seq.video_tracks.iter().filter(|track| track.enabled) {
             if let Some(transition) = track.transitions.iter().find(|transition| transition.range().contains(t)) {
-                let planned = crate::transitions::gpu_plan::evaluate(&transition.effect, transition.progress(t) as f32, opts.scale)
+                let raw = transition.progress(t) as f32;
+                let effective = if transition.reverse { 1.0 - raw } else { raw };
+                let planned = crate::transitions::gpu_plan::evaluate(&transition.effect, effective, opts.scale)
                     .map_err(|error| transition_error(seq_id, error))?;
                 let mut inputs = [Vec::new(), Vec::new()];
                 for (slot, id) in inputs.iter_mut().zip([transition.from, transition.to]) {
@@ -468,12 +470,10 @@ fn preflight_sequence(
                         }
                     }
                 }
-                let progress = if transition.reverse {
+                if transition.reverse {
                     inputs.swap(0, 1);
-                    1.0 - planned.progress
-                } else {
-                    planned.progress
-                };
+                }
+                let progress = planned.progress;
                 let evidence = PlanNodeEvidence {
                     item_id: seq_id,
                     registry_id: Some(planned.id.clone()),
