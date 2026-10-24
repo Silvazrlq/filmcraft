@@ -335,3 +335,51 @@ mod tests {
         assert_eq!(first.map(f32::from_le_bytes), Some(5.0));
     }
 }
+
+#[cfg(test)]
+mod kernel_semantics_tests {
+    /// Replica of `cs_roughen_box`: mean of 2r+1 taps, zero outside, one axis.
+    fn box_pass(plane: &[f32], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<f32> {
+        let mut out = vec![0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = 0f32;
+                for t in 0..=2 * r {
+                    let o = t as isize - r as isize;
+                    let (qx, qy) = if horizontal { (x as isize + o, y as isize) } else { (x as isize, y as isize + o) };
+                    if qx >= 0 && qy >= 0 && (qx as usize) < w && (qy as usize) < h {
+                        acc += plane[qy as usize * w + qx as usize];
+                    }
+                }
+                out[y * w + x] = acc / (2 * r + 1) as f32;
+            }
+        }
+        out
+    }
+
+    /// The six box passes in the plan's order, as the GPU runs them.
+    fn kernel_depth(alpha: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+        let (rx, ry) = crate::effects::gaussian_boxes(w, h, sigma, sigma);
+        let mut plane = alpha.to_vec();
+        for &r in &rx {
+            plane = box_pass(&plane, w, h, r as usize, true);
+        }
+        for &r in &ry {
+            plane = box_pass(&plane, w, h, r as usize, false);
+        }
+        plane
+    }
+
+    #[test]
+    fn kernel_depth_passes_match_cpu_blur_plane() {
+        let (w, h) = (67usize, 41usize);
+        let alpha: Vec<f32> = (0..w * h).map(|i| if (i * 37 + i / w) % 11 < 6 { 1.0 } else { ((i * 13) % 17) as f32 / 17.0 }).collect();
+        for sigma in [0.25f32, 0.5, 1.0, 2.5, 5.0, 12.0] {
+            let cpu = crate::vfx::blur_plane(&alpha, w, h, sigma);
+            let gpu = kernel_depth(&alpha, w, h, sigma);
+            let worst = cpu.iter().zip(&gpu).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+            eprintln!("sigma {sigma}: worst depth diff {worst:e}");
+            assert!(worst < 1e-4, "sigma {sigma}: depth differs by {worst}");
+        }
+    }
+}
