@@ -12,11 +12,13 @@
 //!   the blend modes.
 
 use super::blend_tests::{device, interior, ramp_layer, stats8, yuv_frame};
+use super::fx_multipass::measure_route;
 use super::*;
 use filmcraft_geom::{Affine, Vec2};
 use filmcraft_project::{EffectInstance, ParamValue, find_effect};
 use filmcraft_render::effects::FxCtx;
-use filmcraft_render::gpufx::FxOp;
+use filmcraft_render::gpufx::{FxOp, GPU_EFFECTS, UNMEASURED_GPU_ROUTES};
+use filmcraft_render::gpufx_multipass::{MULTIPASS_ROUTES, multipass_effect_for};
 use filmcraft_render::plan::{LayerFx, execute_cpu};
 use filmcraft_time::Tick;
 
@@ -720,6 +722,104 @@ fn gpu_effects_match_cpu_exactly() {
         }
     }
     assert!(failures.is_empty(), "GPU effects differ from the CPU:\n{}", failures.join("\n"));
+}
+
+/// Per-channel relative tolerance for multipass routes (`|cpu - gpu| / (1 + |cpu|)`, as in [`compare`]).
+const MULTIPASS_TOLERANCE: f32 = EXACT;
+
+/// CPU oracle for each multipass route id: the same sample parameters as `multipass_effect_for`,
+/// through the CPU effect (`vfx::apply`), not through the plan.
+fn cpu_reference(id: &str, source: &filmcraft_render::Image) -> Option<filmcraft_render::Image> {
+    let (e, cx) = match id {
+        "vr_blur" => (effect("vr_blur", &[("blurriness", fl(4.0)), ("frame_layout", ch(0))]), cx(Tick::ZERO, 1.0)),
+        "vr_sharpen" => (effect("vr_sharpen", &[("amount", fl(60.0)), ("frame_layout", ch(0))]), cx(Tick::ZERO, 1.0)),
+        "vr_denoise" => (
+            effect("vr_denoise", &[("amount", fl(50.0)), ("noise_type", ch(0)), ("show_noise", ParamValue::Bool(false)), ("frame_layout", ch(0))]),
+            cx(Tick::ZERO, 1.0),
+        ),
+        _ => (filmcraft_render::gpufx_multipass::multipass_case(id)?, filmcraft_render::gpufx_multipass::multipass_cx()),
+    };
+    let mut out = source.clone();
+    filmcraft_render::vfx::apply(&mut out, &e, &cx).then_some(out)
+}
+
+/// Every registered multipass route on the adapter against its CPU oracle, channel by channel.
+#[test]
+fn multipass_routes_match_cpu_oracle_on_adapter() {
+    if MULTIPASS_ROUTES.is_empty() {
+        eprintln!("no multipass routes registered");
+        return;
+    }
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let source = filmcraft_render::Image { w: w as usize, h: h as usize, px: px.clone() };
+    let mut failures = Vec::new();
+    for id in MULTIPASS_ROUTES {
+        let Some(route) = multipass_effect_for(id, w, h) else {
+            failures.push(format!("{id}: no MultipassEffect registered"));
+            continue;
+        };
+        let Some(expected) = cpu_reference(id, &source) else {
+            failures.push(format!("no CPU oracle for {id}"));
+            continue;
+        };
+        let gpu = match measure_route(&dev, &q, &route, &px, (w, h)) {
+            Ok(values) => values,
+            Err(err) => {
+                failures.push(format!("{id}: measure_route failed: {err:?}"));
+                continue;
+            }
+        };
+        if gpu.len() != expected.px.len() {
+            failures.push(format!("{id}: GPU returned {} values, CPU {}", gpu.len(), expected.px.len()));
+            continue;
+        }
+        let mut worst = 0f32;
+        let mut bad = 0usize;
+        for (a, b) in expected.px.iter().zip(&gpu) {
+            let d = (a - b).abs() / (1.0 + a.abs());
+            // NaN (from a non-finite GPU value) counts as a failure.
+            if d.is_nan() || d > MULTIPASS_TOLERANCE {
+                bad += 1;
+            }
+            if !d.is_nan() {
+                worst = worst.max(d);
+            }
+        }
+        eprintln!("{id}: max rel diff {worst:.2e}, {bad} values over {MULTIPASS_TOLERANCE:.0e}");
+        if bad > 0 {
+            failures.push(format!("{id}: {bad} values over {MULTIPASS_TOLERANCE:.0e} (worst {worst:.2e})"));
+        }
+    }
+    assert!(failures.is_empty(), "multipass GPU routes differ from the CPU oracle:\n{}", failures.join("\n"));
+}
+
+/// Diagnostic for a diverging route: runs each prefix of the roughen_edges plan on the adapter and prints
+/// the checksum of its result slot. Ignored by default; run it on the AMD with `--ignored --nocapture`.
+/// It prints GPU values only; comparing a stage against the CPU needs a CPU replica per pass.
+#[test]
+#[ignore = "AMD diagnostic: prints per-stage GPU checksums for roughen_edges"]
+fn roughen_edges_stage_checksums_on_adapter() {
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let route = filmcraft_render::gpufx_multipass::multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    for stage in 1..=route.plan.passes.len() {
+        let slot = route.plan.passes.get(stage - 1).map(|p| p.output).expect("stage is in range");
+        let values = super::fx_multipass::measure_route_until(&dev, &q, &route, &px, (w, h), stage, slot).expect("stage measurement");
+        let sum: f64 = values.iter().map(|&v| f64::from(v)).sum();
+        eprintln!("roughen_edges stage {stage} slot {}: sum {sum:.6}, texels {}", slot.0, values.len());
+    }
+}
+
+/// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
+#[test]
+fn multipass_harness_refuses_ids_outside_unmeasured_list() {
+    for id in MULTIPASS_ROUTES {
+        assert!(UNMEASURED_GPU_ROUTES.contains(id), "{id} is a multipass route but not in UNMEASURED_GPU_ROUTES");
+        assert!(!GPU_EFFECTS.contains(id), "{id} is a multipass route but already in GPU_EFFECTS");
+    }
 }
 
 #[test]

@@ -47,8 +47,11 @@ pub mod demo_source;
 pub mod device_scope;
 pub mod export_renderer;
 pub mod fx;
+#[cfg_attr(not(test), allow(dead_code, reason = "no effect routes use the runner yet"))]
+mod fx_multipass;
 pub mod lut;
 pub mod mask;
+mod noise_u64;
 pub mod nv12_repack;
 pub mod resident;
 mod timeline_transition;
@@ -1997,3 +2000,5 @@ mod blend_tests;
 mod fx_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vr_tests;
