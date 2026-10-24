@@ -259,6 +259,24 @@ fn allocate(device: &wgpu::Device, size: (u32, u32)) -> Scratch {
 /// drivers (see `MAP_TIMEOUT` in `lib.rs`), so this path waits at most this long.
 const MEASURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Measurement by stages: runs only the first `pass_count` passes of `effect` and returns the texels of
+/// `slot` after them, so a divergence can be pinned to the first pass that breaks. Same contract as
+/// [`measure_route`] (test-measurement path only, UNMEASURED ids only). The prefix is validated before
+/// any device work, so a bad count or an unwritten slot never reaches the GPU.
+pub fn measure_route_until(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    effect: &filmcraft_render::gpufx_multipass::MultipassEffect,
+    source: &[f32],
+    size: (u32, u32),
+    pass_count: usize,
+    slot: Slot,
+) -> Result<Vec<f32>, MultipassGpuError> {
+    let plan = filmcraft_render::gpufx_multipass::prefix_plan(&effect.plan, pass_count, slot).map_err(MultipassGpuError::Plan)?;
+    let prefix = filmcraft_render::gpufx_multipass::MultipassEffect { id: effect.id, wgsl: effect.wgsl, kernels: effect.kernels, plan };
+    measure_route(device, queue, &prefix, source, size)
+}
+
 /// Runs `effect` on a `size` Rgba32Float frame given as row-major RGBA f32 texels and returns the result texels. Test-measurement path only: production code must not call it. Refuses an id that is not listed in filmcraft_render::gpufx::UNMEASURED_GPU_ROUTES.
 pub fn measure_route(
     device: &wgpu::Device,
@@ -411,6 +429,23 @@ mod tests {
             assert!(size <= PARAM_BINDING_BYTES, "{name}: params needs {size} bytes, binding has {PARAM_BINDING_BYTES}");
             assert_eq!(MAX_PARAM_BYTES as u64, PARAM_BINDING_BYTES);
         }
+    }
+
+    #[test]
+    fn stage_measurement_refuses_bad_indices_before_the_device() {
+        use filmcraft_render::gpufx_multipass::{MultipassEffect, Pass};
+        let effect = MultipassEffect {
+            id: "roughen_edges",
+            wgsl: SHADER,
+            kernels: &["cs_copy"],
+            plan: filmcraft_render::gpufx_multipass::MultipassPlan {
+                passes: vec![Pass { kernel: "cs_copy", inputs: vec![Slot(0)], output: Slot(1), params: vec![] }],
+                result: Slot(1),
+            },
+        };
+        assert_eq!(filmcraft_render::gpufx_multipass::prefix_plan(&effect.plan, 0, Slot(1)).err(), Some(MultipassError::EmptyPlan));
+        assert_eq!(filmcraft_render::gpufx_multipass::prefix_plan(&effect.plan, 2, Slot(1)).err(), Some(MultipassError::TooManyPasses { passes: 2 }));
+        assert!(filmcraft_render::gpufx_multipass::prefix_plan(&effect.plan, 1, Slot(1)).is_ok());
     }
 
     fn adapter_device() -> Option<(wgpu::Device, wgpu::Queue)> {
