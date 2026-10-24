@@ -1938,7 +1938,8 @@ mod tests {
             match outcome {
                 EffectGpuOutcome::Eligible(op) => assert!(op.gpu_ok(), "{}", def.id),
                 EffectGpuOutcome::Ineligible(EffectGpuFailure::UnsupportedOperation) => {
-                    assert!(!GPU_EFFECTS.contains(&def.id), "{} lost its existing GPU route", def.id);
+                    // the clip-timed ops need the clip envelope, which this context lacks: they refuse the GPU route
+                    assert!(!GPU_EFFECTS.contains(&def.id) || matches!(def.id, "grow" | "shrink" | "spin" | "move"), "{} lost its existing GPU route", def.id);
                 }
                 EffectGpuOutcome::Ineligible(EffectGpuFailure::UnsupportedCase) => {
                     assert!(matches!(def.id, "lumetri" | "transform"), "{}", def.id);

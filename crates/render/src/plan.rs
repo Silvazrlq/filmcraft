@@ -369,6 +369,17 @@ impl ResidentRequiredFramePlan {
 fn rejected(item_id: Option<ItemId>, id: Option<String>, reason: EligibilityFailure) -> GpuPlanError {
     GpuPlanError { item_id, id, reason }
 }
+/// The clip span the effects may read (grow, shrink, spin and move animate over it).
+fn clip_timing(seq: &Sequence, item: &TrackItem, t: Tick, source: (u32, u32)) -> crate::vfx::ClipTiming {
+    crate::vfx::ClipTiming {
+        clip_seconds: item.duration.seconds(),
+        clip_offset: (t - item.start).seconds(),
+        frame_rate: seq.settings.frame_rate.as_f64(),
+        sequence_size: (seq.settings.width, seq.settings.height),
+        source_size: source,
+    }
+}
+
 fn structure(item_id: ItemId, detail: FrameRequirement) -> GpuPlanError {
     rejected(Some(item_id), None, EligibilityFailure::UnsupportedFrameStructure { detail })
 }
@@ -581,6 +592,7 @@ fn preflight_item(
     if ![motion.a, motion.b, motion.c, motion.d, motion.e, motion.f].iter().all(|x| x.is_finite()) {
         return Err(structure(item.item, FrameRequirement::InvalidMotion));
     }
+    let timing = clip_timing(seq, item, t, size);
     let cx = crate::effects::FxCtx {
         t: mt,
         px_scale: 1.0,
@@ -588,7 +600,7 @@ fn preflight_item(
         timecode: "",
         clip_name: &item.name,
         project: Some(project),
-        env: None,
+        env: Some(&timing),
         frame_rate: seq.settings.frame_rate.as_f64(),
         working: seq.settings.color.working,
     };
@@ -1315,6 +1327,7 @@ fn push_item(
             let (lw, lh) = ((frame.width as usize / n).max(1), (frame.height as usize / n).max(1));
             let px_scale = lw as f32 / size.0.max(1) as f32;
             let tc = "";
+            let timing = clip_timing(seq, item, t, size);
             let cx = crate::effects::FxCtx {
                 t: mt,
                 px_scale,
@@ -1322,7 +1335,7 @@ fn push_item(
                 timecode: tc,
                 clip_name: &item.name,
                 project: Some(project),
-                env: None,
+                env: Some(&timing),
                 frame_rate: seq.settings.frame_rate.as_f64(),
                 working: seq.settings.color.working,
             };

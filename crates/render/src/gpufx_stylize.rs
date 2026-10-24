@@ -15,6 +15,10 @@ impl StylizeOp {
         if !e.enabled || w == 0 || h == 0 || w > 16_384 || h > 16_384 {
             return None;
         }
+        // These ops need the clip envelope; without it progress freezes at 0, so refuse the GPU route.
+        if cx.env.is_none() && matches!(e.effect.as_str(), "grow" | "shrink" | "spin" | "move") {
+            return None;
+        }
         let img = Image { w, h, px: Vec::new() };
         let progress = cx.env.map_or(0.0, |env| {
             let d = env.clip_seconds();
@@ -164,6 +168,52 @@ mod tests {
     use filmcraft_project::{ParamValue, find_effect};
     use filmcraft_time::Tick;
 
+    struct ClipEnv;
+
+    impl crate::vfx::FxEnv for ClipEnv {
+        fn frame(&self, _: f64, _: &filmcraft_project::EffectInstance) -> Option<Image> {
+            None
+        }
+        fn source_frame(&self, _: f64, _: f32) -> Option<Image> {
+            None
+        }
+        fn track(&self, _: usize) -> Option<Image> {
+            None
+        }
+        fn layer_to_output(&self) -> filmcraft_geom::Affine {
+            filmcraft_geom::Affine::translate(0.0, 0.0)
+        }
+        fn clip_seconds(&self) -> f64 {
+            10.0
+        }
+        fn clip_offset(&self) -> f64 {
+            0.0
+        }
+        fn frame_rate(&self) -> f64 {
+            24.0
+        }
+        fn media_timecode(&self) -> String {
+            String::new()
+        }
+        fn file_name(&self) -> String {
+            String::new()
+        }
+        fn sequence_name(&self) -> String {
+            String::new()
+        }
+        fn sequence_size(&self) -> (u32, u32) {
+            (7, 5)
+        }
+        fn source_size(&self) -> (u32, u32) {
+            (7, 5)
+        }
+        fn clip_key(&self) -> u64 {
+            0
+        }
+    }
+
+    static CLIP: ClipEnv = ClipEnv;
+
     fn context() -> FxCtx<'static> {
         FxCtx {
             t: Tick::ZERO,
@@ -172,9 +222,26 @@ mod tests {
             timecode: "",
             clip_name: "",
             project: None,
-            env: None,
+            env: Some(&CLIP),
             frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
+        }
+    }
+
+    #[test]
+    fn clip_timed_stylize_ops_refuse_gpu_route_without_clip_envelope() {
+        for id in ["grow", "shrink", "move", "spin"] {
+            let Some(def) = find_effect(id) else { panic!("missing registered effect {id}") };
+            let effect = def.instance();
+            let no_env = FxCtx { env: None, ..context() };
+            assert!(StylizeOp::eval(&effect, &no_env, 7, 5).is_none(), "{id}: frozen GPU op without env");
+            assert!(StylizeOp::eval(&effect, &context(), 7, 5).is_some(), "{id}: no GPU op with env");
+        }
+        for id in ["wiggle", "camera_shake"] {
+            let Some(def) = find_effect(id) else { panic!("missing registered effect {id}") };
+            let effect = def.instance();
+            let no_env = FxCtx { env: None, ..context() };
+            assert!(StylizeOp::eval(&effect, &no_env, 7, 5).is_some(), "{id}: time-driven via seconds");
         }
     }
 

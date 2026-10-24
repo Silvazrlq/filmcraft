@@ -33,8 +33,21 @@ fn parity_budget(id: &str) -> f32 {
     if id == "vr_chromatic_aberrations" { VR_CHROMATIC_GPU_BUDGET } else { EXACT }
 }
 
+static CLIP: filmcraft_render::vfx::ClipTiming =
+    filmcraft_render::vfx::ClipTiming { clip_seconds: 10.0, clip_offset: 0.0, frame_rate: 24.0, sequence_size: (67, 41), source_size: (67, 41) };
+
 fn cx(t: Tick, px_scale: f32) -> FxCtx<'static> {
-    FxCtx { t, px_scale, seconds: 0.0, timecode: "", clip_name: "", project: None, env: None, frame_rate: 24.0, working: filmcraft_color::WorkingSpace::Rec709 }
+    FxCtx {
+        t,
+        px_scale,
+        seconds: 0.0,
+        timecode: "",
+        clip_name: "",
+        project: None,
+        env: Some(&CLIP),
+        frame_rate: 24.0,
+        working: filmcraft_color::WorkingSpace::Rec709,
+    }
 }
 
 fn required_gpu_device() -> (wgpu::Device, wgpu::Queue) {
