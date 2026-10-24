@@ -695,10 +695,6 @@ pub fn render(s: &mut Session, mode: RenderMode, p: &Value) -> Result<Value> {
         if let Some(msg) = gpu_refusal(store.gpu_route().as_deref(), &todo) {
             return Err(EngineError::Other(msg));
         }
-        // Every part is admitted, but no GPU frame renderer is wired to this path yet.
-        return Err(EngineError::Other(
-            "GPU render admitted the frames but no GPU frame renderer is wired yet. Nothing was rendered and no frame fell back to the CPU.".into(),
-        ));
     }
     std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(format!("preview folder {}: {e}", dir.display())))?;
     let frames: i64 = todo.iter().map(|t| t.len).fold(0, i64::saturating_add);
@@ -730,6 +726,8 @@ pub fn render(s: &mut Session, mode: RenderMode, p: &Value) -> Result<Value> {
             let part = dir.join(format!("{name}.part"));
             let first = t.seg.first_frame.saturating_add(t.off);
             let settings = filmcraft_export::ExportSettings {
+                // GPU route: frames come from the GPU only; a refused frame fails the part.
+                gpu_rendering: if gpu { filmcraft_export::GpuRendering::GpuRequired } else { filmcraft_export::GpuRendering::Off },
                 format: filmcraft_export::Format::ProRes,
                 path: part.to_string_lossy().to_string(),
                 range: Some(TimeRange::from_bounds(rate.tick_of(first), rate.tick_of(first.saturating_add(t.len)))),

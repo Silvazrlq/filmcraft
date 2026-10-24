@@ -618,3 +618,24 @@ fn amd_required_frame_uses_resident_session_without_cpu_source_lookup() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(sources.0.load(Ordering::SeqCst), 0, "strict mode must not call CPU or compressed source lookup");
 }
+
+/// A renderer without a strict GPU path refuses every required frame with a reason (no CPU image).
+#[test]
+fn required_frames_are_refused_by_renderers_without_a_strict_path() {
+    struct NoStrictPath;
+    impl FrameRenderer for NoStrictPath {
+        fn render(
+            &mut self,
+            _: &Project,
+            _: ItemId,
+            _: filmcraft_time::Tick,
+            _: filmcraft_render::RenderOptions,
+            _: &dyn SourceProvider,
+        ) -> Option<filmcraft_render::Image> {
+            None
+        }
+    }
+    let (p, seq, sources) = project();
+    let err = NoStrictPath.render_required(&p, seq, filmcraft_time::Tick::ZERO, filmcraft_render::RenderOptions::default(), &sources);
+    assert!(err.is_err(), "a required frame must never come from the CPU");
+}

@@ -142,6 +142,8 @@ pub(crate) struct Pipeline {
     /// provide them; pooled because `frame` runs on several export threads at once.
     renderer: Option<RendererPool>,
     required_gpu: bool,
+    /// `GpuRequired`: frames come from [`FrameRenderer::render_required`].
+    gpu_required_frames: bool,
     pub seq: ItemId,
     /// Output frame rate (frame `f` is at `rate.tick_of(f)`).
     pub rate: FrameRate,
@@ -239,13 +241,14 @@ impl Pipeline {
             }
             RendererPool::new(list)
         };
-        let required_gpu = settings.gpu_rendering == GpuRendering::AmdRequired;
+        let required_gpu = matches!(settings.gpu_rendering, GpuRendering::AmdRequired | GpuRendering::GpuRequired);
         if required_gpu && renderer.is_none() {
             return Err(ExportError::Unsupported("AMD GPU frame renderer is unavailable".into()));
         }
         Ok(Pipeline {
             renderer,
             required_gpu,
+            gpu_required_frames: settings.gpu_rendering == GpuRendering::GpuRequired,
             seq_rate: q.settings.frame_rate,
             start_tc: q.start_timecode,
             drop_frame: q.settings.drop_frame,
@@ -276,6 +279,20 @@ impl Pipeline {
         }
         let pool = self.renderer.as_ref().filter(|_| !cpu_frame);
         let gpu = match pool {
+            Some(pool) if self.gpu_required_frames => {
+                let asked = web_time::Instant::now();
+                let res = pool.with(|r| {
+                    crate::note_lock_wait(asked.elapsed());
+                    r.render_required(&self.project, self.seq, t, self.opts, sources)
+                });
+                match res {
+                    Some(Ok(img)) => Some(img),
+                    Some(Err(reason)) => {
+                        return Err(ExportError::Unsupported(format!("GPU render refused frame {f}: {reason}. Nothing was rendered on the CPU.")));
+                    }
+                    None => None,
+                }
+            }
             Some(pool) => {
                 let asked = web_time::Instant::now();
                 pool.with(|r| {
