@@ -1166,7 +1166,13 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
                 ui.painter().with_clip_rect(pic).image(tex, inner, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
         } else {
-            app.ui.status = tl!("Export preview unavailable in GPU-only mode; CPU fallback is disabled").into();
+            ui.painter().text(
+                pic.center(),
+                Align2::CENTER_CENTER,
+                tl!("Export preview unavailable in GPU-only mode; CPU fallback is disabled"),
+                Tokens::ui(12.0),
+                t.text_dim,
+            );
         }
     } else {
         ui.painter().text(pic.center(), Align2::CENTER_CENTER, tl!("Audio only"), Tokens::ui(13.0), t.text_dim);
