@@ -94,7 +94,7 @@ async fn listen_for_signals() {
         }
         if !EXPORTING.load(Ordering::SeqCst) {
             diag(format_args!("filmcraft-cli: interrupted"));
-            std::process::exit(status);
+            exit_process(status);
         }
         STOP.store(status, Ordering::SeqCst);
     }
@@ -352,8 +352,9 @@ fn register_hardware_decoders() -> filmcraft_platform::Availability {
     filmcraft_platform::register()
 }
 
-/// Waits at most 3 s for the startup encoder probes. Only export paths need them: the GUI reads the probe
-/// asynchronously, and the other subcommands must not pay for it.
+/// Waits at most 3 s for the startup encoder probes before exit. The probe is started for every
+/// subcommand, so every exit can wait for it (bounded): a probe still inside the GPU driver when the
+/// process ends crashes it (#crash).
 fn wait_export_probes() {
     filmcraft_platform::wait_encoder_probes(std::time::Duration::from_secs(3));
 }
