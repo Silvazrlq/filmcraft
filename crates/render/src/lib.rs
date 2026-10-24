@@ -18,6 +18,8 @@ pub mod effects;
 pub mod flow;
 pub mod gpufx;
 pub mod gpufx_multipass;
+pub mod gpufx_roughen;
+pub mod gpufx_spacer;
 pub mod graphic_clip;
 pub mod graphics;
 pub mod image;
