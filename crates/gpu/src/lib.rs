@@ -1012,6 +1012,10 @@ impl GpuCompositor {
         if strict && layers.iter().any(|layer| layer.fx.as_ref().is_some_and(|fx| self.fx.is_none() || fx.size.0.max(fx.size.1) > max_side)) {
             return Err(failure());
         }
+        // a routed layer has no CPU path here, whatever the policy
+        if layers.iter().any(|layer| layer.fx.as_ref().is_some_and(|fx| fx.is_routed() && self.fx.is_none())) {
+            return Err(failure());
+        }
         let cpu_fx: Vec<Option<PlanLayer>> = layers
             .iter()
             .map(|l| {
@@ -1099,7 +1103,7 @@ impl GpuCompositor {
                 }
                 None => None,
             };
-            if strict && l.fx.is_some() && job.is_none() {
+            if l.fx.as_ref().is_some_and(|fx| strict || fx.is_routed()) && job.is_none() {
                 return Err(failure());
             }
             // what the layer draws: the effect result (linear premultiplied RGBA) or the frame
