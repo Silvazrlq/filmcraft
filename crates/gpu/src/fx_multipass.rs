@@ -15,6 +15,20 @@ use wgpu::util::DeviceExt;
 /// Workgroup edge used by every kernel in `fx_multipass.wgsl`.
 const WORKGROUP: u32 = 8;
 
+/// Size of the parameter uniform at binding 3, in bytes. Every pass binds exactly this many bytes,
+/// whatever its block length, because the kernels declare the whole `MAX_PARAM_BYTES` array.
+pub(crate) const PARAM_BINDING_BYTES: u64 = MAX_PARAM_BYTES as u64;
+
+/// A pass's parameter block zero-padded to the full binding size. Pure, so the size is testable
+/// without a device. Blocks longer than the binding are cut here; validation refuses them first.
+pub(crate) fn param_block(params: &[u8]) -> [u8; MAX_PARAM_BYTES] {
+    let mut block = [0u8; MAX_PARAM_BYTES];
+    for (dst, src) in block.iter_mut().zip(params) {
+        *dst = *src;
+    }
+    block
+}
+
 /// Why a multi-pass route was refused or failed. No variant means a silent CPU fallback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MultipassGpuError {
@@ -94,7 +108,11 @@ impl MultipassRunner {
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(PARAM_BINDING_BYTES),
+                    },
                     count: None,
                 },
             ],
@@ -184,9 +202,7 @@ impl MultipassRunner {
                 self.view(slot, source)
             };
             let output = self.view(pass.output, source)?;
-            let mut block = pass.params.clone();
-            // Validation caps the block at MAX_PARAM_BYTES and a multiple of 16; the uniform needs at least 16.
-            block.resize(block.len().max(16).next_multiple_of(16).min(MAX_PARAM_BYTES), 0);
+            let block = param_block(&pass.params);
             let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("fx-multipass-params"),
                 contents: &block,
@@ -359,6 +375,42 @@ mod tests {
         wgpu::naga::valid::Validator::new(Default::default(), Default::default()).validate(&module).expect("fx_multipass.wgsl must validate");
         let entries: Vec<&str> = module.entry_points.iter().map(|e| e.name.as_str()).collect();
         assert!(entries.contains(&"cs_copy") && entries.contains(&"cs_mix"), "{entries:?}");
+    }
+
+    #[test]
+    fn param_block_always_fills_the_whole_binding() {
+        for len in [0usize, 16, 32, 64, MAX_PARAM_BYTES] {
+            let block = param_block(&vec![7u8; len]);
+            assert_eq!(block.len() as u64, PARAM_BINDING_BYTES, "block of {len} bytes");
+            assert!(block[..len].iter().all(|&b| b == 7) && block[len..].iter().all(|&b| b == 0));
+        }
+    }
+
+    #[test]
+    fn every_kernel_params_declaration_fits_the_bound_binding() {
+        // fx_roughen.wgsl needs noise_u64.wgsl in front of it, as the render crate assembles it.
+        let roughen = format!("{}\n{}", include_str!("noise_u64.wgsl"), include_str!("fx_roughen.wgsl"));
+        let sources = [
+            ("fx_multipass.wgsl", include_str!("fx_multipass.wgsl").to_string()),
+            ("fx_roughen.wgsl", roughen),
+            ("fx_spacer.wgsl", include_str!("fx_spacer.wgsl").to_string()),
+            ("vr.wgsl", include_str!("vr.wgsl").to_string()),
+        ];
+        for (name, src) in sources {
+            let module = wgpu::naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let mut layouter = wgpu::naga::proc::Layouter::default();
+            layouter.update(module.to_ctx()).unwrap_or_else(|e| panic!("{name} layout: {e:?}"));
+            let global = module
+                .global_variables
+                .iter()
+                .find(|(_, g)| g.name.as_deref() == Some("params"))
+                .map(|(handle, _)| handle)
+                .unwrap_or_else(|| panic!("{name} declares no `params` uniform"));
+            let ty = module.global_variables[global].ty;
+            let size = u64::from(layouter[ty].size);
+            assert!(size <= PARAM_BINDING_BYTES, "{name}: params needs {size} bytes, binding has {PARAM_BINDING_BYTES}");
+            assert_eq!(MAX_PARAM_BYTES as u64, PARAM_BINDING_BYTES);
+        }
     }
 
     fn adapter_device() -> Option<(wgpu::Device, wgpu::Queue)> {
