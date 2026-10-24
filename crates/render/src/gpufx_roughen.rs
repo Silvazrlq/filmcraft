@@ -413,6 +413,7 @@ mod kernel_semantics_tests {
     /// -1 because the cell hash has mod 12 = 4 (x + z). A GPU that returns +1 has a different hash or index.
     #[test]
     fn corner_001_gradient_sign_at_origin() {
+        use super::{grad_reference, hash_cell_reference};
         let h = hash_cell_reference(0, 0, 1, 0);
         assert_eq!(h % 12, 4);
         assert_eq!(grad_reference(h, 0.0, 0.0, -1.0), -1.0);
