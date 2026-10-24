@@ -298,4 +298,48 @@ mod tests {
             assert!(worst < 1e-4 && worst_rgb < 1e-4, "edge_type {kind}: alpha {worst}, rgb {worst_rgb}");
         }
     }
+
+    /// Hash probe of the AMD run (seed 0, y = 0): GPU parts per (x, z) class, from `roughen_hash_z_probe`.
+    const AMD_HASH_PROBE: [((i64, i64), [u32; 4]); 5] = [
+        ((1, 1), [1226, 12508, 49520, 8123]),
+        ((-1, -1), [1226, 12508, 49520, 8123]),
+        ((-1, 1), [17248, 7359, 28906, 43183]),
+        ((1, -1), [17248, 7359, 28906, 43183]),
+        ((0, 1), [44663, 13058, 55923, 60144]),
+    ];
+
+    /// Probe output order: hi low 16, hi high 16, lo low 16, lo high 16.
+    fn probe_parts(h: U64) -> [u32; 4] {
+        [h.hi & 0xffff, h.hi >> 16, h.lo & 0xffff, h.lo >> 16]
+    }
+
+    /// `hash_u_pair` with the z multiplier passed in, to test the constant the WGSL file writes.
+    fn hash_u_pair_z(x: i64, z: i64, c3: U64) -> U64 {
+        let c1 = U64::from_u64(0x9E37_79B9_7F4A_7C15);
+        let c5 = U64::from_u64(0xBF58_476D_1CE4_E5B9);
+        let c6 = U64::from_u64(0x94D0_49BB_1331_11EB);
+        // The probe runs with seed 0 (roughen_edges default), so the seed term is zero and omitted.
+        let mut h = U64::from_i32(x as i32).mul(c1).xor(U64::from_i32(z as i32).mul(c3));
+        h = h.xor(h.shr(31));
+        h = h.mul(c5);
+        h = h.xor(h.shr(29));
+        h = h.mul(c6);
+        h.xor(h.shr(32))
+    }
+
+    /// Hypothesis test for the AMD hash probe. `noise_u64.wgsl` writes the z multiplier's high word as
+    /// `0x166567B1`; the CPU constant is `0x165667B1` (`vfx::hash_u`). Replaying the shader's word
+    /// reproduces every measured value, and the CPU constant does not.
+    #[test]
+    fn wgsl_z_multiplier_typo_reproduces_amd_hash_probe() {
+        let wgsl_c3 = U64 { hi: 0x166567B1, lo: 0x9E3779F9 };
+        let cpu_c3 = U64::from_u64(0x1656_67B1_9E37_79F9);
+        assert_ne!(wgsl_c3, cpu_c3);
+        for ((x, z), gpu) in AMD_HASH_PROBE {
+            assert_eq!(probe_parts(hash_u_pair_z(x, z, wgsl_c3)), gpu, "shader constant, x {x} z {z}");
+            assert_ne!(probe_parts(hash_u_pair_z(x, z, cpu_c3)), gpu, "CPU constant must differ, x {x} z {z}");
+            // Keeps the test honest: the pair replica equals hash_u when the constant is right.
+            assert_eq!(hash_u_pair_z(x, z, cpu_c3).to_u64(), hash_u(x, 0, z, 0), "x {x} z {z}");
+        }
+    }
 }
