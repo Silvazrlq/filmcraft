@@ -2,13 +2,15 @@
 //!
 //! Kernel contract (see `fx_multipass.wgsl`): bindings 0 and 1 are the plan inputs (unfilterable
 //! Rgba32Float, read with `textureLoad`) and binding 2 is the pass output (write-only Rgba32Float
-//! storage). Every intermediate slot owns one texture, allocated on first use and kept while the
+//! storage) and binding 3 is the pass parameter block (uniform, `MAX_PARAM_BYTES` bytes, zero-padded
+//! to 16). Every intermediate slot owns one texture, allocated on first use and kept while the
 //! size stays the same, so a plan of N passes allocates at most its distinct slots. No resolution
 //! cap: the device decides whether the slots fit, and an allocation failure comes back as
 //! `MultipassGpuError::OutOfMemory`. There is no CPU fallback. Errors are captured with error scopes
 //! so the device's uncaptured-error handler never panics.
 
-use filmcraft_render::gpufx_multipass::{MAX_SLOTS, MultipassError, MultipassPlan, Slot};
+use filmcraft_render::gpufx_multipass::{MAX_PARAM_BYTES, MAX_SLOTS, MultipassError, MultipassPlan, Slot};
+use wgpu::util::DeviceExt;
 
 /// Workgroup edge used by every kernel in `fx_multipass.wgsl`.
 const WORKGROUP: u32 = 8;
@@ -85,6 +87,12 @@ impl MultipassRunner {
                         format: wgpu::TextureFormat::Rgba32Float,
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
             ],
@@ -174,6 +182,14 @@ impl MultipassRunner {
                 self.view(slot, source)
             };
             let output = self.view(pass.output, source)?;
+            let mut block = pass.params.clone();
+            // Validation caps the block at MAX_PARAM_BYTES and a multiple of 16; the uniform needs at least 16.
+            block.resize(block.len().max(16).next_multiple_of(16).min(MAX_PARAM_BYTES), 0);
+            let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("fx-multipass-params"),
+                contents: &block,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("fx-multipass-pass"),
                 layout: &self.layout,
@@ -181,6 +197,7 @@ impl MultipassRunner {
                     wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input(0)?) },
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(input(1)?) },
                     wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(output) },
+                    wgpu::BindGroupEntry { binding: 3, resource: params.as_entire_binding() },
                 ],
             });
             let mut pass_encoder = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(pass.kernel), timestamp_writes: None });
@@ -261,8 +278,10 @@ mod tests {
         let view = source.create_view(&Default::default());
         let mut encoder = device.create_command_encoder(&Default::default());
         assert_eq!(runner.encode(&device, &mut encoder, &bad, &view, (4, 4)).err(), Some(MultipassGpuError::Plan(MultipassError::EmptyPlan)));
-        let unknown =
-            MultipassPlan { passes: vec![filmcraft_render::gpufx_multipass::Pass { kernel: "nope", inputs: vec![Slot(0)], output: Slot(1) }], result: Slot(1) };
+        let unknown = MultipassPlan {
+            passes: vec![filmcraft_render::gpufx_multipass::Pass { kernel: "nope", inputs: vec![Slot(0)], output: Slot(1), params: vec![] }],
+            result: Slot(1),
+        };
         assert_eq!(runner.encode(&device, &mut encoder, &unknown, &view, (4, 4)).err(), Some(MultipassGpuError::UnknownKernel("nope")));
         assert_eq!(runner.encode(&device, &mut encoder, &unknown, &view, (0, 4)).err(), Some(MultipassGpuError::SizeMismatch));
     }
