@@ -144,6 +144,24 @@ pub fn slot_bytes(width: u32, height: u32) -> Option<u64> {
     u64::from(width).checked_mul(u64::from(height))?.checked_mul(SLOT_BYTES_PER_PIXEL)
 }
 
+/// One effect's multi-pass route. Built from the effect instance at evaluation time.
+pub struct MultipassEffect {
+    pub id: &'static str,
+    /// WGSL module with one compute entry point per name in `kernels`. Same binding contract as crates/gpu/src/fx_multipass.wgsl.
+    pub wgsl: &'static str,
+    pub kernels: &'static [&'static str],
+    pub plan: MultipassPlan,
+}
+
+/// Builds the route for `id`, if one is registered. None until a port adds its arm.
+pub fn multipass_effect_for(id: &str) -> Option<MultipassEffect> {
+    let _ = id;
+    None
+}
+
+/// Routes that have a plan, kernel and CPU parity case. Empty until a port lands; the classifier in gpufx.rs still refuses every id.
+pub const MULTIPASS_ROUTES: &[&str] = &[];
+
 #[cfg(test)]
 mod tests {
     use super::*;
