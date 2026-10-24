@@ -13,6 +13,10 @@ pub const MAX_SLOTS: usize = 8;
 /// Inputs one pass may read. The kernel contract in `filmcraft-gpu` binds two.
 pub const MAX_INPUTS: usize = 2;
 
+/// Largest parameter block a pass may carry, in bytes. Fixed at 128 so the uniform binding has one
+/// size for every kernel. Must stay a multiple of 16 (the `vec4` alignment of the uniform).
+pub const MAX_PARAM_BYTES: usize = 128;
+
 /// Bytes per pixel of the intermediate format (Rgba32Float).
 pub const SLOT_BYTES_PER_PIXEL: u64 = 16;
 
@@ -34,6 +38,9 @@ pub struct Pass {
     pub inputs: Vec<Slot>,
     /// Slot written by the pass.
     pub output: Slot,
+    /// Parameter block bound as a uniform (binding 3). Empty when the kernel takes no parameters.
+    /// Otherwise a multiple of 16 bytes and at most [`MAX_PARAM_BYTES`]; the GPU side zero-pads it.
+    pub params: Vec<u8>,
 }
 
 /// An ordered multi-pass route with its result slot.
@@ -69,6 +76,8 @@ pub enum MultipassError {
     ResultNotWritten { slot: u8 },
     /// Byte count of the intermediates overflows `u64`.
     SizeOverflow,
+    /// A pass's parameter block is longer than [`MAX_PARAM_BYTES`] or not a multiple of 16.
+    BadParams { pass: usize, len: usize },
 }
 
 impl MultipassPlan {
@@ -86,6 +95,9 @@ impl MultipassPlan {
         for (index, pass) in self.passes.iter().enumerate() {
             if pass.kernel.is_empty() {
                 return Err(MultipassError::EmptyKernel { pass: index });
+            }
+            if pass.params.len() > MAX_PARAM_BYTES || pass.params.len() % 16 != 0 {
+                return Err(MultipassError::BadParams { pass: index, len: pass.params.len() });
             }
             if pass.inputs.is_empty() {
                 return Err(MultipassError::NoInputs { pass: index });
@@ -137,7 +149,7 @@ mod tests {
     use super::*;
 
     fn pass(kernel: &'static str, inputs: &[u8], output: u8) -> Pass {
-        Pass { kernel, inputs: inputs.iter().map(|&s| Slot(s)).collect(), output: Slot(output) }
+        Pass { kernel, inputs: inputs.iter().map(|&s| Slot(s)).collect(), output: Slot(output), params: Vec::new() }
     }
 
     fn plan(passes: Vec<Pass>, result: u8) -> MultipassPlan {
@@ -191,6 +203,20 @@ mod tests {
     fn result_must_be_an_intermediate_some_pass_wrote() {
         assert_eq!(plan(vec![pass("k", &[0], 1)], 2).validate(), Err(MultipassError::ResultNotWritten { slot: 2 }));
         assert_eq!(plan(vec![pass("k", &[0], 1)], 0).validate(), Err(MultipassError::ResultNotWritten { slot: 0 }));
+    }
+
+    #[test]
+    fn parameter_blocks_must_be_aligned_and_bounded() {
+        let with = |len: usize| {
+            let mut p = pass("k", &[0], 1);
+            p.params = vec![0; len];
+            plan(vec![p], 1).validate()
+        };
+        assert_eq!(with(0), Ok(1));
+        assert_eq!(with(16), Ok(1));
+        assert_eq!(with(MAX_PARAM_BYTES), Ok(1));
+        assert_eq!(with(20), Err(MultipassError::BadParams { pass: 0, len: 20 }));
+        assert_eq!(with(MAX_PARAM_BYTES + 16), Err(MultipassError::BadParams { pass: 0, len: MAX_PARAM_BYTES + 16 }));
     }
 
     #[test]
