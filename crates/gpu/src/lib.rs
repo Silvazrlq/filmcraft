@@ -1994,4 +1994,6 @@ mod blend_tests;
 #[cfg(test)]
 mod fx_tests;
 #[cfg(test)]
+mod vr_tests;
+#[cfg(test)]
 mod tests;

@@ -1061,7 +1061,7 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
             continue;
         }
         let masked = e.masks.iter().any(|m| m.mode != filmcraft_project::MaskMode::None);
-        if masked || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+        if masked || !crate::gpufx::gpu_route_allowed(&e.effect) {
             return None;
         }
         chain.push(e);

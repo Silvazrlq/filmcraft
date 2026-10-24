@@ -663,6 +663,17 @@ pub fn evaluate_gpu_effect(e: &EffectInstance, cx: &FxCtx, w: usize, h: usize) -
     if op.gpu_ok() { Outcome::Eligible(op) } else { Outcome::Ineligible(Failure::UnsupportedCase) }
 }
 
+/// GPU routes written but not yet measured against the CPU on real hardware (see
+/// `TESTE-GPU-MULTIPASS-VR.md`). [`gpu_route_allowed`] refuses them even when listed in
+/// [`GPU_EFFECTS`], so they stay on the CPU until a measured run clears them.
+pub const UNMEASURED_GPU_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise"];
+
+/// The classifier the plan uses: a standard effect runs on the GPU only if it is listed in
+/// [`GPU_EFFECTS`] and not in [`UNMEASURED_GPU_ROUTES`].
+pub fn gpu_route_allowed(id: &str) -> bool {
+    GPU_EFFECTS.contains(&id) && !UNMEASURED_GPU_ROUTES.contains(&id)
+}
+
 /// `Image::transformed` without the mip path: the destination rectangle it writes and the inverse.
 fn resample(w: usize, h: usize, m: &Affine, opacity: f32) -> Resample {
     let Some(inv) = m.inverse() else { return Resample { inv: None, rect: [0; 4], opacity } };
@@ -1864,6 +1875,13 @@ fn resample_cpu(src: &Image, inv: &Affine, rect: [u32; 4]) -> Image {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unmeasured_vr_routes_are_refused_by_the_classifier() {
+        for id in super::UNMEASURED_GPU_ROUTES {
+            assert!(!super::gpu_route_allowed(id), "{id} must stay on the CPU until measured");
+        }
+    }
+
     use super::*;
     use filmcraft_project::{ParamValue, find_effect};
     use filmcraft_time::Tick;

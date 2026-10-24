@@ -112,44 +112,57 @@ fn per_view(img: &mut Image, layout: u32, f: impl Fn(&mut Image)) {
     }
 }
 
-/// Three-pass box approximation of a Gaussian along each row with wrap-around; the sigma of a
-/// row is `sigma / cos(latitude)` (capped at a quarter turn).
+/// Box radius of row `y` (of a `h`-row view `w` wide) in the three-pass box approximation of a
+/// Gaussian of `sigma / cos(latitude)` (capped at a quarter turn). 0: the row is left alone.
+///
+/// The WGSL kernel `vr_blur_row` in `crates/gpu/src/vr.wgsl` mirrors this function and
+/// [`blur_row_wrap`]; both are the spec for it. Rounding is `floor(x + 0.5)` (not `round()`, whose
+/// ties differ between Rust and WGSL).
+pub(crate) fn row_radius(sigma: f32, w: usize, h: usize, y: usize) -> usize {
+    let lat = (0.5 - (y as f64 + 0.5) / h as f64) * PI;
+    let s = (sigma as f64 / lat.cos().max(1e-3)).min(w as f64 / 4.0) as f32;
+    if s <= 0.3 {
+        return 0;
+    }
+    let r = ((((12.0 * s * s / 3.0 + 1.0).sqrt() - 1.0) / 2.0 + 0.5).floor().max(1.0) as isize).min((w as isize - 1) / 2).max(0);
+    r as usize
+}
+
+/// Three box passes of radius `r` along one row (`w` RGBA pixels) with wrap-around. Sliding
+/// window sums, so the cost is O(w) per pass whatever `r` is.
+pub(crate) fn blur_row_wrap(row: &mut [f32], w: usize, r: usize) {
+    if r == 0 || w == 0 {
+        return;
+    }
+    let (wi, r) = (w as isize, r as isize);
+    let mut tmp = row.to_vec();
+    for _ in 0..3 {
+        let inv = 1.0 / (2 * r + 1) as f32;
+        // sliding window sum with wrap-around
+        let mut acc = [0f32; 4];
+        for j in -r..=r {
+            let i = j.rem_euclid(wi) as usize;
+            for k in 0..4 {
+                acc[k] += row[i * 4 + k];
+            }
+        }
+        for x in 0..wi {
+            for k in 0..4 {
+                tmp[x as usize * 4 + k] = acc[k] * inv;
+            }
+            let (out_i, in_i) = ((x - r).rem_euclid(wi) as usize, (x + r + 1).rem_euclid(wi) as usize);
+            for k in 0..4 {
+                acc[k] += row[in_i * 4 + k] - row[out_i * 4 + k];
+            }
+        }
+        row.copy_from_slice(&tmp);
+    }
+}
+
+/// Three-pass box approximation of a Gaussian along each row with wrap-around (see [`row_radius`]).
 fn blur_rows_wrap(img: &mut Image, sigma: f32) {
     let (w, h) = (img.w, img.h);
-    img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-        let lat = (0.5 - (y as f64 + 0.5) / h as f64) * PI;
-        let s = (sigma as f64 / lat.cos().max(1e-3)).min(w as f64 / 4.0) as f32;
-        if s <= 0.3 {
-            return;
-        }
-        let r = ((((12.0 * s * s / 3.0 + 1.0).sqrt() - 1.0) / 2.0).round().max(1.0) as isize).min((w as isize - 1) / 2).max(0);
-        if r == 0 {
-            return;
-        }
-        let wi = w as isize;
-        let mut tmp = row.to_vec();
-        for _ in 0..3 {
-            let inv = 1.0 / (2 * r + 1) as f32;
-            // sliding window sum with wrap-around
-            let mut acc = [0f32; 4];
-            for j in -r..=r {
-                let i = j.rem_euclid(wi) as usize;
-                for k in 0..4 {
-                    acc[k] += row[i * 4 + k];
-                }
-            }
-            for x in 0..wi {
-                for k in 0..4 {
-                    tmp[x as usize * 4 + k] = acc[k] * inv;
-                }
-                let (out_i, in_i) = ((x - r).rem_euclid(wi) as usize, (x + r + 1).rem_euclid(wi) as usize);
-                for k in 0..4 {
-                    acc[k] += row[in_i * 4 + k] - row[out_i * 4 + k];
-                }
-            }
-            row.copy_from_slice(&tmp);
-        }
-    });
+    img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| blur_row_wrap(row, w, row_radius(sigma, w, h, y)));
 }
 
 fn vr_blur_image(img: &mut Image, sigma: f32) {
