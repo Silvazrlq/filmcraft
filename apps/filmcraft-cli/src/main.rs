@@ -219,6 +219,23 @@ fn fail(msg: impl std::fmt::Display) -> ! {
     exit_process(1)
 }
 
+/// Creates the AMD export provider the first time an export command runs, so startup, help, listings and
+/// inspection never pay for the GPU renderer. A failed creation leaves the provider unset: an export that
+/// requires AMD is then refused, never run on the CPU.
+#[cfg(target_os = "linux")]
+fn ensure_amd_export_provider(s: &mut Session) {
+    if s.amd_export_provider.is_some() {
+        return;
+    }
+    if let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {
+        let (adapter, _, _) = renderer.wgpu_handles();
+        s.amd_export_provider = Some(filmcraft_platform::amd_export_provider(adapter));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_amd_export_provider(_: &mut Session) {}
+
 /// Where commands go: an in-process session, or the desktop app's control channel.
 enum Backend {
     Local(Box<Session>),
@@ -234,11 +251,6 @@ impl Backend {
             return Backend::Bridge(BridgeClient::new(addr).unwrap_or_else(|e| usage(e)));
         }
         let mut s = Session::default();
-        #[cfg(target_os = "linux")]
-        if let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {
-            let (adapter, _, _) = renderer.wgpu_handles();
-            s.amd_export_provider = Some(filmcraft_platform::amd_export_provider(adapter));
-        }
         // user export presets (and other per-user libraries) from the data directory
         if let Some(dir) = a.opt("--data-dir").map(std::path::PathBuf::from).or_else(filmcraft_engine::autosave::default_data_dir) {
             s.export_presets.set_dir(&dir);
@@ -258,6 +270,9 @@ impl Backend {
             // this process exits after the command, so a background export would never be written:
             // long commands wait unless the caller says otherwise (#2342)
             Backend::Local(s) => {
+                if matches!(id, "file.exportMedia" | "export.quick") || id.starts_with("export.queue.") {
+                    ensure_amd_export_provider(s);
+                }
                 if filmcraft_automation::long_job::LONG_COMMANDS.contains(&id)
                     && let Some(p) = params.as_object_mut()
                 {
@@ -712,7 +727,11 @@ async fn cli() {
             let server = match a.opt("--bridge") {
                 Some(addr) => filmcraft_automation::FilmcraftMcp::bridge(addr).unwrap_or_else(|e| usage(e)),
                 None => match Backend::open(&a) {
-                    Backend::Local(s) => filmcraft_automation::FilmcraftMcp::headless(*s),
+                    Backend::Local(mut s) => {
+                        // the MCP server can run any export command, so it takes the provider up front
+                        ensure_amd_export_provider(&mut s);
+                        filmcraft_automation::FilmcraftMcp::headless(*s)
+                    }
                     Backend::Bridge(_) => usage("mcp: use --bridge ADDR to drive a running app"),
                 },
             };
