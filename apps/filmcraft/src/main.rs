@@ -207,6 +207,9 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             }),
         );
         let mut session = Session::default();
+        if filmcraft_gpu::ExportRenderer::new_required().is_ok() {
+            session.previews.set_gpu_route(Some(std::sync::Arc::new(GpuPreviewRoute)));
+        }
         #[cfg(target_os = "linux")]
         if amd_provider_enabled && let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {
             let (adapter, _, _) = renderer.wgpu_handles();
@@ -410,6 +413,27 @@ impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
         sources: &dyn filmcraft_render::SourceProvider,
     ) -> Option<filmcraft_render::Image> {
         self.0.render_cpu_compatible(project, seq, t, opts, sources)
+    }
+
+    fn render_required(
+        &mut self,
+        project: &filmcraft_project::Project,
+        seq: filmcraft_project::ItemId,
+        t: filmcraft_time::Tick,
+        opts: filmcraft_render::RenderOptions,
+        sources: &dyn filmcraft_render::SourceProvider,
+    ) -> Result<filmcraft_render::Image, String> {
+        self.0.render_required_pixels(project, seq, t, opts, sources).map_err(|e| e.to_string())
+    }
+}
+
+/// Enter's GPU route. Admitted when the strict GPU device opens; the GPU itself refuses any frame
+/// it cannot draw, and that refusal fails the part (no CPU frame is substituted).
+struct GpuPreviewRoute;
+
+impl filmcraft_engine::previews::GpuPreviewRoute for GpuPreviewRoute {
+    fn admit(&self, _seg: &filmcraft_render::preview::Segment, _first_frame: i64, _frames: i64) -> Result<(), String> {
+        Ok(())
     }
 }
 

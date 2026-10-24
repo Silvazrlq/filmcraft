@@ -93,6 +93,9 @@ pub enum HardwareEncoding {
 pub enum GpuRendering {
     Auto,
     AmdRequired,
+    /// Frames come from the GPU's strict required path (no CPU composite, no silent fallback);
+    /// the encoder stays the software one. A refused frame fails the export.
+    GpuRequired,
     #[default]
     Off,
 }

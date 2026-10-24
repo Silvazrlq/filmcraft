@@ -237,21 +237,45 @@ impl ExportRenderer {
         let plan = self.plan_required(project, seq, t, opts, sources)?;
         self.check_required_admission()?;
         let (view, size, submission) = self.compositor.composite_required(&plan)?;
+        self.wait_required(submission)?;
+        self.check_required_admission()?;
+        Ok((view, size))
+    }
+
+    /// Render a validated chain and read it back as premultiplied linear RGBA f32, the same layout
+    /// as the CPU reference [`Image`]. Strict: every node must pass the required admission, so a
+    /// refused frame returns the reason and never a CPU-composited image.
+    pub fn render_required_pixels(
+        &mut self,
+        project: &Project,
+        seq: ItemId,
+        t: Tick,
+        opts: RenderOptions,
+        sources: &dyn SourceProvider,
+    ) -> Result<Image, GpuPlanError> {
+        let plan = self.plan_required(project, seq, t, opts, sources)?;
+        self.check_required_admission()?;
+        let (_view, _size, submission) = self.compositor.composite_required(&plan)?;
+        self.wait_required(submission)?;
+        self.check_required_admission()?;
+        let (w, h, px) = self.compositor.read_accumulator().ok_or_else(|| {
+            strict_error(EligibilityFailure::RuntimeFailure { stage: "AMD required readback", detail: "accumulator is not available".into() })
+        })?;
+        Ok(Image { w: w as usize, h: h as usize, px })
+    }
+
+    fn wait_required(&self, submission: wgpu::SubmissionIndex) -> Result<(), GpuPlanError> {
         match poll_required_device(
             &self.device,
             wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(REQUIRED_RENDER_TIMEOUT) },
             "AMD required render completion",
         )? {
-            wgpu::PollStatus::QueueEmpty | wgpu::PollStatus::WaitSucceeded => {}
-            wgpu::PollStatus::Poll => {
-                return Err(strict_error(EligibilityFailure::RuntimeFailure {
-                    stage: "AMD required render completion",
-                    detail: "bounded wait returned without completing submission".into(),
-                }));
-            }
+            wgpu::PollStatus::QueueEmpty | wgpu::PollStatus::WaitSucceeded => Ok(()),
+            wgpu::PollStatus::Poll => Err(strict_error(EligibilityFailure::RuntimeFailure {
+                stage: "AMD required render completion",
+                detail: "bounded wait returned without completing submission".into(),
+            })),
         }
-        self.check_required_admission()?;
-        Ok((view, size))
     }
 
     /// Check materialized extents and every operation against this exact adapter/device.
