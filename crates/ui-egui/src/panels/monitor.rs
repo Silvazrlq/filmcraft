@@ -223,11 +223,14 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
                 gpu_notice = Some(tl!("GPU channel display is unsupported; CPU fallback is disabled").into());
                 (None, None)
             } else {
-                match app.frames.get_plan(&key) {
-                    Some(plan) => {
+                let ready = app.frames.get_plan(&key);
+                let error = app.frames.plan_error(&key);
+                // the exact plan is still rendering: keep the nearest cached one on screen (no blink)
+                match plan_stand_in(key, ready, error.is_some(), || app.frames.nearest_plan(key, 6)) {
+                    Some((shown_key, plan)) => {
                         let old_status = app.ui.status.clone();
-                        match app.gpu_present(key, &plan) {
-                            Some((id, _)) => (Some(id), Some(key)),
+                        match app.gpu_present(shown_key, &plan) {
+                            Some((id, _)) => (Some(id), Some(shown_key)),
                             None => {
                                 if app.ui.status != old_status {
                                     gpu_notice = Some(app.ui.status.clone());
@@ -238,7 +241,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
                         }
                     }
                     None => {
-                        if let Some(error) = app.frames.plan_error(&key) {
+                        if let Some(error) = error {
                             gpu_notice = Some(error);
                         } else if app.gpu.is_none() {
                             gpu_notice = Some(tl!("GPU preview unavailable; CPU fallback is disabled").into());
@@ -512,6 +515,19 @@ fn asked_before(app: &mut FilmcraftApp, prefix: &str, key: FrameKey, playing: bo
         asked.pop_front();
     }
     before
+}
+
+/// The GPU plan a Program monitor shows: the exact one, else the nearest cached one before it (so
+/// the picture stays up while the exact frame renders). A plan error for the exact frame is shown
+/// as an error, never covered by a stand-in.
+fn plan_stand_in<T>(key: FrameKey, exact: Option<T>, error: bool, nearest: impl FnOnce() -> Option<(FrameKey, T)>) -> Option<(FrameKey, T)> {
+    if let Some(plan) = exact {
+        return Some((key, plan));
+    }
+    if error {
+        return None;
+    }
+    nearest()
 }
 
 /// A monitor texture from the CPU frame path: the exact frame, else the nearest cached one before
@@ -1208,5 +1224,20 @@ mod tests {
     fn eyedropper_rejects_empty_and_truncated_frames() {
         assert_eq!(sample_rgb(&Rgba { w: 0, h: 0, px: vec![] }, (0.5, 0.5)), None);
         assert_eq!(sample_rgb(&Rgba { w: 4, h: 4, px: vec![0; 10] }, (0.5, 0.5)), None);
+    }
+
+    #[test]
+    fn plan_stand_in_keeps_the_picture_while_the_exact_plan_renders() {
+        use filmcraft_project::ItemId;
+        let key = FrameKey { target: Target::SequencePlan(ItemId(1)), frame: 10, size: 1000, revision: 1, draft: false };
+        let behind = FrameKey { frame: 8, ..key };
+        // exact ready: shown as itself
+        assert_eq!(plan_stand_in(key, Some(1u32), false, || Some((behind, 9))), Some((key, 1)));
+        // exact rendering: the nearest cached plan stands in
+        assert_eq!(plan_stand_in(key, None, false, || Some((behind, 9))), Some((behind, 9)));
+        // exact rendering, nothing cached nearby: nothing to show
+        assert_eq!(plan_stand_in::<u32>(key, None, false, || None), None);
+        // an error for the exact frame is not covered by an older plan
+        assert_eq!(plan_stand_in(key, None, true, || Some((behind, 9))), None);
     }
 }
