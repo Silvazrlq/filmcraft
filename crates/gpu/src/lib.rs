@@ -936,19 +936,26 @@ impl GpuCompositor {
     }
 
     /// Composite a plan; returns the output view (sRGB, over black) and its size.
-    pub fn composite(&mut self, plan: &FramePlan) -> (wgpu::TextureView, (u32, u32)) {
+    pub fn composite(&mut self, plan: &FramePlan) -> Result<(wgpu::TextureView, (u32, u32)), GpuPlanError> {
         self.composite_prepared(plan, None)
     }
 
     /// [`composite`](Self::composite) with texel conversions already done by [`prepare`] (the
     /// result is identical; only the upload work on this thread differs).
-    pub fn composite_prepared(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>) -> (wgpu::TextureView, (u32, u32)) {
+    pub fn composite_prepared(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>) -> Result<(wgpu::TextureView, (u32, u32)), GpuPlanError> {
         self.render_plan(plan, prep, true, true)
     }
 
-    fn render_plan(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>, clear: bool, resolve: bool) -> (wgpu::TextureView, (u32, u32)) {
-        // The legacy policy cannot produce a strict rejection.
-        self.render_plan_checked(plan, prep, clear, resolve, false).map(|(view, size, _)| (view, size)).unwrap_or_else(|_| (self.dummy.clone(), (1, 1)))
+    /// Legacy policy: no strict rejections, but a routed layer that cannot run on the GPU is an error
+    /// here (never a black frame).
+    fn render_plan(
+        &mut self,
+        plan: &FramePlan,
+        prep: Option<&PreparedPlan>,
+        clear: bool,
+        resolve: bool,
+    ) -> Result<(wgpu::TextureView, (u32, u32)), GpuPlanError> {
+        self.render_plan_checked(plan, prep, clear, resolve, false).map(|(view, size, _)| (view, size))
     }
 
     fn render_plan_checked(
@@ -993,7 +1000,7 @@ impl GpuCompositor {
                 if strict {
                     return Err(failure());
                 }
-                let (view, size) = self.composite_steps(*width, *height, steps, prep, clear, resolve);
+                let (view, size) = self.composite_steps(*width, *height, steps, prep, clear, resolve)?;
                 let submission = self.queue.submit([]);
                 return Ok((view, size, submission));
             }
@@ -1103,7 +1110,7 @@ impl GpuCompositor {
                 }
                 None => None,
             };
-            if l.fx.as_ref().is_some_and(|fx| strict || fx.is_routed()) && job.is_none() {
+            if job.is_none() && l.fx.as_ref().is_some_and(|fx| job_failure_is_fatal(strict, fx)) {
                 return Err(failure());
             }
             // what the layer draws: the effect result (linear premultiplied RGBA) or the frame
@@ -1659,7 +1666,7 @@ impl GpuCompositor {
         prep: Option<&PreparedPlan>,
         clear: bool,
         resolve: bool,
-    ) -> (wgpu::TextureView, (u32, u32)) {
+    ) -> Result<(wgpu::TextureView, (u32, u32)), GpuPlanError> {
         let unsupported =
             steps.iter().any(|s| matches!(s, PlanStep::Transition { effect, .. } if !matches!(effect.effect.as_str(), "push" | "flare" | "blur_dissolve")));
         let unavailable =
@@ -1670,13 +1677,13 @@ impl GpuCompositor {
             return self.render_plan(&FramePlan::Image(filmcraft_render::plan::execute_cpu(&plan)), None, clear, resolve);
         }
         let empty = FramePlan::Layers { width, height, layers: Vec::new() };
-        let (canvas, dims) = self.render_plan(&empty, None, clear, false);
+        let (canvas, dims) = self.render_plan(&empty, None, clear, false)?;
         let mut children = prep.map(|p| p.children.iter());
         for step in steps {
             match step {
                 PlanStep::Layers(layers) => {
                     let p = children.as_mut().and_then(Iterator::next);
-                    self.render_plan(&FramePlan::Layers { width, height, layers: layers.clone() }, p, false, false);
+                    self.render_plan(&FramePlan::Layers { width, height, layers: layers.clone() }, p, false, false)?;
                 }
                 PlanStep::Transition { inputs, effect, progress, scale } => {
                     let mut views = [self.dummy.clone(), self.dummy.clone()];
@@ -1684,7 +1691,7 @@ impl GpuCompositor {
                         let p = children.as_mut().and_then(Iterator::next);
                         // Isolate each clip; queued draws keep the parent accumulator and blend order.
                         std::mem::swap(&mut self.accum, &mut self.transition_inputs[index]);
-                        let (view, _) = self.render_plan(&FramePlan::Layers { width, height, layers: layers.clone() }, p, true, false);
+                        let (view, _) = self.render_plan(&FramePlan::Layers { width, height, layers: layers.clone() }, p, true, false)?;
                         std::mem::swap(&mut self.accum, &mut self.transition_inputs[index]);
                         views[index] = view;
                     }
@@ -1710,7 +1717,8 @@ impl GpuCompositor {
     /// not run on the GPU (transitions: the caller renders those on the CPU) or a failed read-back.
     pub fn render_export_prepared(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>) -> Option<(u32, u32, Vec<f32>)> {
         let t = std::time::Instant::now();
-        self.render_plan(plan, prep, true, false);
+        // None on a failed routed layer: the CPU-compatible caller renders the frame itself
+        self.render_plan(plan, prep, true, false).ok()?;
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("filmcraft-composite-export") });
         let size = self.copy_accumulator(&mut enc)?;
         self.queue.submit([enc.finish()]);
@@ -1740,7 +1748,7 @@ impl GpuCompositor {
         if !output.usage().contains(wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC) {
             return None;
         }
-        let (accum, (width, height)) = self.render_plan(plan, prep, true, false);
+        let (accum, (width, height)) = self.render_plan(plan, prep, true, false).ok()?;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("filmcraft-nv12-export") });
         let (coded_width, coded_height) = coded_size.unwrap_or((width, height));
         let layout = self.nv12_output.record_coded(&self.device, &mut encoder, &accum, &output, width, height, coded_width, coded_height)?;
@@ -2006,3 +2014,30 @@ mod fx_tests;
 mod tests;
 #[cfg(test)]
 mod vr_tests;
+
+/// Whether a layer whose effect job could not be built fails the frame: always for a routed layer
+/// (it has no CPU path), and in strict mode for any other layer.
+fn job_failure_is_fatal(strict: bool, fx: &filmcraft_render::plan::LayerFx) -> bool {
+    strict || fx.is_routed()
+}
+
+#[cfg(test)]
+mod routed_guard_tests {
+    use super::*;
+    use filmcraft_render::gpufx::FxOp;
+    use filmcraft_render::gpufx_multipass::{multipass_cx, multipass_op};
+    use filmcraft_render::plan::LayerFx;
+
+    #[test]
+    fn routed_layer_job_failure_is_fatal_in_every_mode() {
+        let mut e = filmcraft_project::find_effect("vr_blur").expect("vr_blur").instance();
+        e.params.get_mut("blurriness").expect("blurriness").value = filmcraft_project::ParamValue::Float(4.0);
+        let op = multipass_op(&e, &multipass_cx(), 67, 41).expect("route");
+        let routed = LayerFx { size: (67, 41), decimation: 1, ops: vec![FxOp::Multipass(op)] };
+        assert!(job_failure_is_fatal(false, &routed));
+        assert!(job_failure_is_fatal(true, &routed));
+        let plain = LayerFx { size: (67, 41), decimation: 1, ops: vec![FxOp::BlackWhite] };
+        assert!(!job_failure_is_fatal(false, &plain));
+        assert!(job_failure_is_fatal(true, &plain));
+    }
+}
