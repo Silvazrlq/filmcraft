@@ -317,8 +317,9 @@ mod linux {
 
     /// Surfaces for a DPB of `dpb_frames`: the DPB, the picture being decoded, one spare, and one
     /// more per transfer lease that can be in flight (a leased surface is never reused).
+    pub(crate) const MAX_POOL_SURFACES: usize = 18 + MAX_IN_FLIGHT_TRANSFERS;
     pub(crate) fn pool_size(dpb_frames: usize) -> usize {
-        dpb_frames.saturating_add(2).saturating_add(MAX_IN_FLIGHT_TRANSFERS).min(18 + MAX_IN_FLIGHT_TRANSFERS)
+        dpb_frames.saturating_add(2).saturating_add(MAX_IN_FLIGHT_TRANSFERS).min(MAX_POOL_SURFACES)
     }
 
     /// The VA-API profiles that decode an H.264 stream of `profile_idc`, best fit first (a Main or
