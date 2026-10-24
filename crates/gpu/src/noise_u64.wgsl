@@ -50,7 +50,7 @@ fn mul64(a: U64, b: U64) -> U64 {
 // hash_u(x, y, z, seed) on pairs; the constants are the CPU's, split into halves.
 fn hash_u64(x: U64, y: U64, z: U64, seed: U64) -> U64 {
     var h = xor64(xor64(mul64(x, U64(0x9E3779B9u, 0x7F4A7C15u)), mul64(y, U64(0xC2B2AE3Du, 0x27D4EB4Fu))),
-                  xor64(mul64(z, U64(0x166567B1u, 0x9E3779F9u)), mul64(seed, U64(0x27D4EB2Fu, 0x166567C5u))));
+                  xor64(mul64(z, U64(0x165667B1u, 0x9E3779F9u)), mul64(seed, U64(0x27D4EB2Fu, 0x165667C5u))));
     h = xor64(h, shr64(h, 31u));
     h = mul64(h, U64(0xBF58476Du, 0x1CE4E5B9u));
     h = xor64(h, shr64(h, 29u));

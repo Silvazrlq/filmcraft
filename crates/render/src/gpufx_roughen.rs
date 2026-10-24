@@ -335,3 +335,87 @@ mod tests {
         assert_eq!(first.map(f32::from_le_bytes), Some(5.0));
     }
 }
+
+/// CPU noise3 and grad3 for the octave probe.
+pub fn noise_reference(x: f32, y: f32, z: f32, seed: u64) -> f32 {
+    crate::vfx::noise3(x, y, z, seed)
+}
+
+/// CPU grad3 of a cell hash for the octave probe.
+pub fn grad_reference(h: u64, x: f32, y: f32, z: f32) -> f32 {
+    crate::vfx::grad3(h, x, y, z)
+}
+
+/// CPU `hash_u` of cell (x, y, z) with `seed`, for the hash probe.
+pub fn hash_cell_reference(x: i64, y: i64, z: i64, seed: u64) -> u64 {
+    crate::vfx::hash_u(x, y, z, seed)
+}
+
+/// CPU fBm of the apply, for the probe: the value the kernel's `fbm` must reproduce.
+pub fn roughen_noise_reference(x: f32, y: f32, z: f32, octaves: f32, seed: u64) -> f32 {
+    crate::vfx::fbm(x, y, z, octaves, seed)
+}
+
+/// Measurement oracle for the AMD stage test: the depth plane after each of the six box passes of
+/// the plan, in plan order (horizontal radii, then vertical), starting from `alpha` (`w` x `h`).
+/// Each stage is a plane of `w * h` values in row-major order.
+pub fn depth_stages(alpha: &[f32], width: usize, height: usize, sigma: f32) -> Vec<Vec<f32>> {
+    let (rx, ry) = crate::effects::gaussian_boxes(width, height, sigma, sigma);
+    let radii: Vec<(u32, bool)> = rx.iter().map(|&r| (r, true)).chain(ry.iter().map(|&r| (r, false))).collect();
+    let mut stages = Vec::with_capacity(radii.len());
+    let mut plane = alpha.to_vec();
+    for (r, horizontal) in radii {
+        plane = box_pass(&plane, width, height, r as usize, horizontal);
+        stages.push(plane.clone());
+    }
+    stages
+}
+
+/// Replica of `cs_roughen_box`: mean of 2r+1 taps, zero outside the plane, along one axis.
+fn box_pass(plane: &[f32], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<f32> {
+    let mut out = vec![0f32; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = 0f32;
+            for t in 0..=2 * r {
+                let o = t as isize - r as isize;
+                let (qx, qy) = if horizontal { (x as isize + o, y as isize) } else { (x as isize, y as isize + o) };
+                if qx >= 0 && qy >= 0 && (qx as usize) < w && (qy as usize) < h {
+                    acc += plane[qy as usize * w + qx as usize];
+                }
+            }
+            out[y * w + x] = acc / (2 * r + 1) as f32;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod kernel_semantics_tests {
+    fn kernel_depth(alpha: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+        super::depth_stages(alpha, w, h, sigma).pop().unwrap_or_default()
+    }
+
+    #[test]
+    fn kernel_depth_passes_match_cpu_blur_plane() {
+        let (w, h) = (67usize, 41usize);
+        let alpha: Vec<f32> = (0..w * h).map(|i| if (i * 37 + i / w) % 11 < 6 { 1.0 } else { ((i * 13) % 17) as f32 / 17.0 }).collect();
+        for sigma in [0.25f32, 0.5, 1.0, 2.5, 5.0, 12.0] {
+            let cpu = crate::vfx::blur_plane(&alpha, w, h, sigma);
+            let gpu = kernel_depth(&alpha, w, h, sigma);
+            let worst = cpu.iter().zip(&gpu).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+            eprintln!("sigma {sigma}: worst depth diff {worst:e}");
+            assert!(worst < 1e-4, "sigma {sigma}: depth differs by {worst}");
+        }
+    }
+
+    /// The corner 001 of the origin cell at octave 0 (z = -1 after the offset): the CPU gradient is
+    /// -1 because the cell hash has mod 12 = 4 (x + z). A GPU that returns +1 has a different hash or index.
+    #[test]
+    fn corner_001_gradient_sign_at_origin() {
+        use super::{grad_reference, hash_cell_reference};
+        let h = hash_cell_reference(0, 0, 1, 0);
+        assert_eq!(h % 12, 4);
+        assert_eq!(grad_reference(h, 0.0, 0.0, -1.0), -1.0);
+    }
+}

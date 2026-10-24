@@ -813,6 +813,245 @@ fn roughen_edges_stage_checksums_on_adapter() {
     }
 }
 
+/// Stage-by-stage parity of roughen_edges on the adapter. Stages 1..=6 are the depth after each box
+/// pass (red channel) against the CPU replica `depth_stages`; stage 7 is the full route against the
+/// CPU oracle, all four channels. Every stage is reported; the test then fails naming the first stage
+/// that is out of tolerance, with its worst relative error and the index of the worst value.
+#[test]
+fn roughen_edges_stages_match_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{depth_stages, roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let route = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect at the case parameters");
+    let alpha: Vec<f32> = px.chunks(4).map(|p| p[3]).collect();
+    let cpu_depth = depth_stages(&alpha, w as usize, h as usize, params.sigma);
+    let relative = |a: f32, b: f32| (a - b).abs() / (1.0 + a.abs());
+    let mut report = Vec::new();
+    let mut first_bad: Option<String> = None;
+    for stage in 1..=cpu_depth.len() {
+        let slot = route.plan.passes.get(stage - 1).map(|p| p.output).expect("stage is in the plan");
+        let gpu = super::fx_multipass::measure_route_until(&dev, &q, &route, &px, (w, h), stage, slot).expect("stage measurement");
+        let cpu = &cpu_depth[stage - 1];
+        let (worst, at) = (0..cpu.len()).fold((0f32, 0usize), |(m, at), i| {
+            let d = relative(cpu[i], gpu[i * 4]);
+            let d = if d.is_nan() { f32::INFINITY } else { d };
+            if d > m { (d, i) } else { (m, at) }
+        });
+        report.push(format!("stage {stage} (box pass {stage}, slot {}): worst {worst:.3e} at texel {at}", slot.0));
+        if worst > EXACT && first_bad.is_none() {
+            first_bad = Some(format!("stage {stage}: worst {worst:.3e} at texel {at} (cpu {}, gpu {})", cpu[at], gpu[at * 4]));
+        }
+    }
+    let gpu = measure_route(&dev, &q, &route, &px, (w, h)).expect("full route");
+    let expected = cpu_reference("roughen_edges", &filmcraft_render::Image { w: w as usize, h: h as usize, px: px.clone() }).expect("CPU oracle");
+    let (worst, at) = gpu.iter().zip(&expected.px).enumerate().fold((0f32, 0usize), |(m, at), (i, (&g, &c))| {
+        let d = relative(c, g);
+        let d = if d.is_nan() { f32::INFINITY } else { d };
+        if d > m { (d, i) } else { (m, at) }
+    });
+    report.push(format!("stage {} (full apply): worst {worst:.3e} at value {at}", cpu_depth.len() + 1));
+    if worst > EXACT && first_bad.is_none() {
+        first_bad = Some(format!("stage {} (apply): worst {worst:.3e} at value {at} (cpu {}, gpu {})", cpu_depth.len() + 1, expected.px[at], gpu[at]));
+    }
+    eprintln!("{}", report.join("\n"));
+    assert!(first_bad.is_none(), "roughen_edges first divergent stage: {}", first_bad.unwrap_or_default());
+}
+
+/// Localises the roughen apply divergence: the probe kernel writes fbm, depth and coordinates per pixel
+/// after the six box passes. Each intermediate is checked against its CPU value and the first pixel out
+/// of tolerance is printed. Run on the AMD with `--nocapture`.
+#[test]
+fn roughen_edges_probe_localises_apply_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{roughen_input, roughen_noise_reference, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let cx = multipass_cx();
+    let params = roughen_params(&roughen_input(&e, &cx)).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("probe route");
+    let (scale, stretch) = (params.scale_px, params.stretch);
+    let mut first: Option<String> = None;
+    let mut worst_noise = 0f32;
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let i = (y * w as usize + x) * 4;
+            let (gn, gd, gcu, gcv) = (gpu[i], gpu[i + 1], gpu[i + 2], gpu[i + 3]);
+            let ecu = (x as f32 + params.offset_x) / (scale * stretch);
+            let ecv = (y as f32 + params.offset_y) * stretch / scale;
+            let en = roughen_noise_reference(ecu, ecv, params.evolution, params.complexity, params.seed);
+            let d = (gn - en).abs();
+            worst_noise = worst_noise.max(if d.is_nan() { f32::INFINITY } else { d });
+            if first.is_none() && (d.is_nan() || d > EXACT || (gcu - ecu).abs() > EXACT || (gcv - ecv).abs() > EXACT) {
+                first = Some(format!("texel ({x},{y}): cu gpu {gcu} cpu {ecu}, cv gpu {gcv} cpu {ecv}, fbm gpu {gn} cpu {en}, depth gpu {gd}"));
+            }
+        }
+    }
+    eprintln!("probe: worst fbm diff {worst_noise:.3e}; first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
+    assert!(first.is_none(), "roughen apply: first divergence {}", first.unwrap_or_default());
+}
+
+/// Hash probe: the GPU's 64-bit cell hash of cells (x, y, 0) against `hash_u` on the CPU, for every texel.
+/// Prints the first differing cell. A mismatch here means the gradient index differs, which flips signs.
+#[test]
+fn roughen_hash_probe_matches_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_hash_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_hash_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("hash probe route");
+    let mut first: Option<String> = None;
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let i = (y * w as usize + x) * 4;
+            let part = |k: usize| gpu[i + k] as u64;
+            let hi = (part(0) | (part(1) << 16)) as u32;
+            let lo = (part(2) | (part(3) << 16)) as u32;
+            let got = (u64::from(hi) << 32) | u64::from(lo);
+            let want = filmcraft_render::gpufx_roughen::hash_cell_reference(x as i64, y as i64, 0, params.seed);
+            if got != want && first.is_none() {
+                first = Some(format!("cell ({x},{y},0): gpu {got:#018x} cpu {want:#018x}"));
+            }
+        }
+    }
+    eprintln!("hash probe: first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
+    assert!(first.is_none(), "cell hash: first divergence {}", first.unwrap_or_default());
+}
+
+/// Octave probe at (0, 0): noise3 of octaves 0..3 (row 0) and the grad3 values of their corners (rows 1 and 2)
+/// against the CPU. The first mismatching entry is printed; a sign error shows as an equal magnitude.
+#[test]
+fn roughen_octave_probe_matches_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{grad_reference, hash_cell_reference, noise_reference, roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_octave_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_octave_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("octave probe route");
+    let mut first: Option<String> = None;
+    let mut table: Vec<String> = Vec::new();
+    let mut check = |label: String, got: f32, want: f32| {
+        let bad = got.is_nan() || (got - want).abs() > EXACT;
+        table.push(format!("{} {label}: gpu {got} cpu {want}", if bad { "DIFF" } else { "ok  " }));
+        if first.is_none() && bad {
+            first = Some(format!("{label}: gpu {got} cpu {want}"));
+        }
+    };
+    for k in 0..4usize {
+        let seed = params.seed.wrapping_add(k as u64);
+        let z = k as f32 * 17.13;
+        let zi = z.floor();
+        let zf = z - zi;
+        let zc = zi as i64;
+        let at = |row: usize| (row * w as usize + k) * 4;
+        check(format!("octave {k} noise3"), gpu[at(0)], noise_reference(0.0, 0.0, z, seed));
+        let r1 = [
+            grad_reference(hash_cell_reference(0, 0, zc, seed), 0.0, 0.0, zf),
+            grad_reference(hash_cell_reference(0, 0, zc + 1, seed), 0.0, 0.0, zf - 1.0),
+            grad_reference(hash_cell_reference(0, 1, zc, seed), 0.0, -1.0, zf),
+            grad_reference(hash_cell_reference(1, 0, zc, seed), -1.0, 0.0, zf),
+        ];
+        let r2 = [
+            grad_reference(hash_cell_reference(1, 1, zc, seed), -1.0, -1.0, zf),
+            grad_reference(hash_cell_reference(1, 0, zc + 1, seed), -1.0, 0.0, zf - 1.0),
+            grad_reference(hash_cell_reference(0, 1, zc + 1, seed), 0.0, -1.0, zf - 1.0),
+            grad_reference(hash_cell_reference(1, 1, zc + 1, seed), -1.0, -1.0, zf - 1.0),
+        ];
+        for (c, want) in r1.iter().enumerate() {
+            check(format!("octave {k} corner row1[{c}]"), gpu[at(1) + c], *want);
+        }
+        for (c, want) in r2.iter().enumerate() {
+            check(format!("octave {k} corner row2[{c}]"), gpu[at(2) + c], *want);
+        }
+        // corner 001 hash in 16-bit parts (row 3) and its mod 12 (row 4)
+        let hz = hash_cell_reference(0, 0, zc + 1, seed);
+        let want_parts = [(hz >> 32) as u32 & 0xffff, (hz >> 48) as u32, hz as u32 & 0xffff, (hz >> 16) as u32 & 0xffff];
+        for (c, want) in want_parts.iter().enumerate() {
+            check(format!("octave {k} corner001 hash part {c}"), gpu[at(3) + c], *want as f32);
+        }
+        check(format!("octave {k} corner001 mod12"), gpu[at(4)], (hz % 12) as f32);
+    }
+    eprintln!("octave probe, all entries (GPU vs CPU):\n{}", table.join("\n"));
+    eprintln!("octave probe: first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
+    assert!(first.is_none(), "octave probe: first divergence {}", first.unwrap_or_default());
+}
+
+/// Hash probe over x and z in {-1, 0, 1, 2}: every texel's cell hash against `hash_u` on the CPU, printed
+/// as a table of (x, z) classes with GPU and CPU parts. Shows whether the fault depends on z, x, or the sign.
+#[test]
+fn roughen_hash_z_probe_matches_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{hash_cell_reference, roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_hash_z_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_hash_z_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("hash z probe route");
+    let mut rows = Vec::new();
+    let mut bad_classes = std::collections::BTreeMap::new();
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let i = (y * w as usize + x) * 4;
+            let ix = (x % 4) as i64 - 1;
+            let iz = (y % 4) as i64 - 1;
+            let hz = hash_cell_reference(ix, 0, iz, params.seed);
+            let want = [(hz >> 32) as u32 & 0xffff, (hz >> 48) as u32, hz as u32 & 0xffff, (hz >> 16) as u32 & 0xffff];
+            let got: Vec<u32> = (0..4).map(|c| gpu[i + c] as u32).collect();
+            let ok = got == want;
+            if !ok {
+                bad_classes.entry((ix, iz)).or_insert_with(|| (got.clone(), want));
+            }
+            if x < 4 && y < 4 {
+                rows.push(format!("x {ix:+} z {iz:+}: {} gpu {:?} cpu {:?}", if ok { "ok  " } else { "DIFF" }, got, want));
+            }
+        }
+    }
+    for ((ix, iz), (got, want)) in &bad_classes {
+        rows.push(format!("first DIFF class x {ix:+} z {iz:+}: gpu {got:?} cpu {want:?}"));
+    }
+    eprintln!("hash z probe:\n{}", rows.join("\n"));
+    assert!(bad_classes.is_empty(), "cell hash differs for {} (x, z) classes", bad_classes.len());
+}
+
 /// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {
