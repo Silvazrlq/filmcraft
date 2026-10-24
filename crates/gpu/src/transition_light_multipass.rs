@@ -6,8 +6,9 @@ use wgpu::util::DeviceExt;
 use crate::transition_catalog::TransitionCatalogError;
 
 type Target = (wgpu::Texture, wgpu::TextureView, (u32, u32));
-const TEMP_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 
+/// Bytes of the two full-frame Rgba32Float scratch slots at `size`, or `None` when the arithmetic
+/// overflows. No artificial cap: the device decides whether it can allocate them (see `draw`).
 fn temp_bytes(size: (u32, u32)) -> Option<u64> {
     u64::from(size.0).checked_mul(u64::from(size.1)).and_then(|n| n.checked_mul(16)).and_then(|n| n.checked_mul(2))
 }
@@ -198,18 +199,16 @@ impl TransitionLightMultipassStage {
             return Err(TransitionCatalogError::InvalidPlan { id: id.into() });
         }
         let limits = device.limits();
-        let bytes = temp_bytes(size);
-        if size.0 == 0
-            || size.1 == 0
-            || size.0 > limits.max_texture_dimension_2d
-            || size.1 > limits.max_texture_dimension_2d
-            || bytes.is_none_or(|n| n > TEMP_BUDGET_BYTES)
-        {
+        if size.0 == 0 || size.1 == 0 || size.0 > limits.max_texture_dimension_2d || size.1 > limits.max_texture_dimension_2d || temp_bytes(size).is_none() {
             return Err(TransitionCatalogError::InvalidSize);
         }
         if self.targets.iter().flatten().any(|target| target.2 != size) {
             self.targets = [None, None];
         }
+        // Allocation failures are captured and returned as an error: no CPU fallback, no panic through
+        // the device's default uncaptured-error handler.
+        let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("transition-light-multipass") });
         let p = op.progress;
         let aux = match op.kind {
@@ -246,7 +245,12 @@ impl TransitionLightMultipassStage {
                 let radii = filmcraft_render::effects::gaussian_boxes(size.0 as usize, size.1 as usize, sigma, sigma);
                 self.blur(device, &mut encoder, transformed, 0, &radii, size, op.kind as u32, p).0
             }
-            _ => return Err(TransitionCatalogError::Unsupported { id: id.into() }),
+            _ => {
+                // `id` already admits only the three kinds above; close the scopes before refusing.
+                pollster::block_on(validation_scope.pop());
+                pollster::block_on(oom_scope.pop());
+                return Err(TransitionCatalogError::Unsupported { id: id.into() });
+            }
         };
         let final_params = Self::params(device, size, op.kind as u32, 0, 0, p, [0.0, op.amount, op.intensity], [0.0; 4]);
         let final_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -265,6 +269,13 @@ impl TransitionLightMultipassStage {
         pass.draw(0..3, 0..1);
         drop(pass);
         queue.submit([encoder.finish()]);
+        let validation_error = pollster::block_on(validation_scope.pop());
+        let oom_error = pollster::block_on(oom_scope.pop());
+        if let Some(error) = oom_error.or(validation_error) {
+            // The cached targets may be invalid textures now; rebuild them on the next draw.
+            self.targets = [None, None];
+            return Err(TransitionCatalogError::AllocationFailed { detail: error.to_string() });
+        }
         Ok(())
     }
 }
@@ -274,9 +285,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checked_two_image_budget_accepts_4k_and_rejects_8k() {
+    fn temp_bytes_counts_two_full_frame_slots_at_4k_and_8k() {
         assert_eq!(temp_bytes((3840, 2160)), Some(265_420_800));
-        assert!(temp_bytes((7680, 4320)).is_some_and(|n| n > TEMP_BUDGET_BYTES));
+        assert!(temp_bytes((7680, 4320)).is_some());
         assert_eq!(temp_bytes((u32::MAX, u32::MAX)), None);
         assert_eq!(temp_bytes((0, 100)), Some(0));
     }
