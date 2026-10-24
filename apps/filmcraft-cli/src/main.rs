@@ -56,6 +56,8 @@ const POLL: Duration = Duration::from_millis(100);
 
 /// True while `export_job` runs a `file.exportMedia` job; only then a signal cancels instead of exiting.
 static EXPORTING: AtomicBool = AtomicBool::new(false);
+/// Set once `register_hardware_decoders` has started the encoder probe thread.
+static PROBES_STARTED: AtomicBool = AtomicBool::new(false);
 /// Signals received during an export (a second one exits at once).
 static SIGNALS: AtomicU32 = AtomicU32::new(0);
 /// Exit status of the signal that asked the running export to stop; 0 while none did.
@@ -190,7 +192,7 @@ fn diag(msg: std::fmt::Arguments) {
 
 fn usage(msg: impl std::fmt::Display) -> ! {
     diag(format_args!("filmcraft-cli: {msg}\nRun `filmcraft-cli help` for usage."));
-    std::process::exit(2)
+    exit_process(2)
 }
 
 /// Read a file off the runtime thread: `cli` is async because MCP, bridge calls and control
@@ -214,7 +216,7 @@ async fn write_file(path: impl Into<std::path::PathBuf>, data: Vec<u8>) -> std::
 
 fn fail(msg: impl std::fmt::Display) -> ! {
     diag(format_args!("filmcraft-cli: {msg}"));
-    std::process::exit(1)
+    exit_process(1)
 }
 
 /// Where commands go: an in-process session, or the desktop app's control channel.
@@ -266,6 +268,10 @@ impl Backend {
                 }
                 if filmcraft_automation::long_job::is_long(id, &params) {
                     return export_job(s, params).await;
+                }
+                // a non-blocking export or queue add runs here, not in `export_job`
+                if matches!(id, "file.exportMedia" | "export.queue.add") {
+                    wait_export_probes();
                 }
                 s.execute(id, params).map_err(|e| e.to_string())
             }
@@ -342,10 +348,23 @@ fn register_gpu_frame_renderer() {
 }
 
 fn register_hardware_decoders() -> filmcraft_platform::Availability {
-    let hardware = filmcraft_platform::register();
-    // The headless command may export immediately; the GUI reads this probe asynchronously.
+    PROBES_STARTED.store(true, Ordering::Relaxed);
+    filmcraft_platform::register()
+}
+
+/// Waits at most 3 s for the startup encoder probes. Only export paths need them: the GUI reads the probe
+/// asynchronously, and the other subcommands must not pay for it.
+fn wait_export_probes() {
     filmcraft_platform::wait_encoder_probes(std::time::Duration::from_secs(3));
-    hardware
+}
+
+/// Exits once the startup encoder probe (if one was started) is done: a probe still inside the GPU
+/// driver when the process ends crashes it (SIGSEGV in `vaPutImage` during `help`, #crash).
+fn exit_process(status: i32) -> ! {
+    if PROBES_STARTED.load(Ordering::Relaxed) {
+        wait_export_probes();
+    }
+    std::process::exit(status)
 }
 
 /// `path` made absolute against the working directory, as the project stores it. Unlike
@@ -361,6 +380,7 @@ async fn export_job(s: &mut Session, mut params: Value) -> Result<Value, String>
     if let Some(p) = params.as_object_mut() {
         p.insert("wait".into(), json!(false));
     }
+    wait_export_probes();
     EXPORTING.store(true, Ordering::SeqCst);
     let r = run_export_job(s, params).await;
     EXPORTING.store(false, Ordering::SeqCst);
@@ -368,7 +388,7 @@ async fn export_job(s: &mut Session, mut params: Value) -> Result<Value, String>
     let late = STOP.load(Ordering::SeqCst);
     if late != 0 {
         diag(format_args!("filmcraft-cli: interrupted after the export finished; output kept"));
-        std::process::exit(late);
+        exit_process(late);
     }
     r
 }
@@ -430,7 +450,7 @@ async fn cancel_export(s: &mut Session, job: u64, path: &str, status: i32) -> ! 
     } else {
         diag(format_args!("filmcraft-cli: export did not stop within 10 s; exiting, temporary output removed, published files kept"));
     }
-    std::process::exit(status)
+    exit_process(status)
 }
 
 /// Removes this process's `.filmcraft-export-<pid>-<n>.tmp` files from the directory of `path`.
@@ -453,8 +473,12 @@ fn remove_export_temps(path: &str) {
 async fn main() {
     tokio::spawn(listen_for_signals());
     cli().await;
+    // The encoder probe thread can still be inside the GPU driver: let it finish before exit (#crash).
+    if PROBES_STARTED.load(Ordering::Relaxed) {
+        wait_export_probes();
+    }
     if STDOUT_ERROR.load(Ordering::Relaxed) {
-        std::process::exit(1);
+        exit_process(1);
     }
 }
 
@@ -557,14 +581,14 @@ async fn cli() {
                         outln!("{}", json!({"line": n + 1, "id": id, "ok": false, "error": e}));
                         failed += 1;
                         if !a.flag("--keep-going") {
-                            std::process::exit(1);
+                            exit_process(1);
                         }
                     }
                 }
             }
             b.finish(&a).await;
             if failed > 0 {
-                std::process::exit(1);
+                exit_process(1);
             }
         }
         "inspect" => {
