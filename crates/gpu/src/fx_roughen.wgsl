@@ -12,13 +12,11 @@
 //   3: params  (uniform array<vec4<u32>, 8>: the pass parameter block, RoughenParams::uniform_bytes,
 //               80 bytes zero-padded; read word by word, f32 words through bitcast)
 //
-// Passes: cs_roughen_blur_h (slot0 alpha -> slot1), cs_roughen_blur_v (slot1 -> slot2),
-// cs_roughen_apply (slot0 + slot2 -> slot3).
-//
-// Blur note: the CPU reference blurs with three box passes per axis (boxes_for_gauss). Those need
-// three different radii, and a plan pass carries no per-pass parameter, so this file blurs with a
-// truncated Gaussian of the same sigma (radius ceil(3 sigma), capped at MAX_RADIUS), zero outside
-// the image. The sigma cap (max(dim, 8) * 2) matches the CPU.
+// Passes (the CPU's three box passes per axis, in the CPU's order: all horizontal, then vertical):
+//   cs_roughen_box x3 horizontal (alpha -> slot1 -> slot2 -> slot3), cs_roughen_box x3 vertical
+//   (slot3 -> slot1 -> slot2 -> slot3), then cs_roughen_apply (slot0 + slot3 -> slot4).
+// Each box pass reads its radius and axis from its own parameter block (words 0..2, see
+// gpufx_roughen.rs). Zero outside the image, normalised by 2r+1, as box_rows does with repeat=false.
 
 @group(0) @binding(0) var input0: texture_2d<f32>;
 @group(0) @binding(1) var input1: texture_2d<f32>;
@@ -37,7 +35,6 @@ fn pf(i: u32) -> f32 {
     return bitcast<f32>(pword(i));
 }
 
-const MAX_RADIUS: f32 = 512.0;
 
 fn add64(a: U64, b: U64) -> U64 {
     let lo = a.lo + b.lo;
@@ -142,60 +139,28 @@ fn unpremul(p: vec4<f32>) -> vec3<f32> {
     return p.rgb / p.a;
 }
 
-// Truncated Gaussian along `dir`, zero outside the image. Weights are normalised by the full
-// kernel sum (out-of-image taps count as zero), as the CPU's zero-padded box blur does.
-fn blur_axis(pos: vec2<i32>, dir: vec2<i32>, dims: vec2<i32>, sigma: f32, alpha: bool) -> f32 {
-    let sg = max(sigma, 1e-3);
-    var r = 0.0;
-    if (sigma > 0.3) {
-        r = min(ceil(3.0 * sg), MAX_RADIUS);
+// One box pass along an axis: mean of 2r+1 taps, zero outside the image (CPU box_rows, repeat=false).
+// Words: 0 radius, 1 1 = read alpha (first pass) / 0 = read red (later passes), 2 0 = horizontal / 1 = vertical.
+@compute @workgroup_size(8, 8, 1)
+fn cs_roughen_box(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(output);
+    if (id.x >= size.x || id.y >= size.y) {
+        return;
     }
-    let ri = i32(r);
-    let inv = 1.0 / (2.0 * sg * sg);
+    let dims = vec2<i32>(textureDimensions(input0));
+    let r = i32(pword(0u));
+    let use_alpha = pword(1u) != 0u;
+    let dir = select(vec2<i32>(0, 1), vec2<i32>(1, 0), pword(2u) == 0u);
+    let texel = vec2<i32>(id.xy);
     var acc = 0.0;
-    var wsum = 0.0;
-    for (var t: i32 = -ri; t <= ri; t = t + 1) {
-        let ft = f32(t);
-        let w = exp(-ft * ft * inv);
-        let q = pos + dir * t;
-        var s = 0.0;
+    for (var t: i32 = -r; t <= r; t = t + 1) {
+        let q = texel + dir * t;
         if (q.x >= 0 && q.y >= 0 && q.x < dims.x && q.y < dims.y) {
             let px = textureLoad(input0, q, 0);
-            if (alpha) {
-                s = px.a;
-            } else {
-                s = px.r;
-            }
+            acc = acc + select(px.r, px.a, use_alpha);
         }
-        acc = acc + w * s;
-        wsum = wsum + w;
     }
-    return acc / max(wsum, 1e-12);
-}
-
-@compute @workgroup_size(8, 8, 1)
-fn cs_roughen_blur_h(@builtin(global_invocation_id) id: vec3<u32>) {
-    let size = textureDimensions(output);
-    if (id.x >= size.x || id.y >= size.y) {
-        return;
-    }
-    let dims = vec2<i32>(textureDimensions(input0));
-    let sigma = min(pf(0u), f32(max(dims.x, 8)) * 2.0);
-    let texel = vec2<i32>(id.xy);
-    let v = blur_axis(texel, vec2<i32>(1, 0), dims, sigma, true);
-    textureStore(output, texel, vec4<f32>(v, 0.0, 0.0, 0.0));
-}
-
-@compute @workgroup_size(8, 8, 1)
-fn cs_roughen_blur_v(@builtin(global_invocation_id) id: vec3<u32>) {
-    let size = textureDimensions(output);
-    if (id.x >= size.x || id.y >= size.y) {
-        return;
-    }
-    let dims = vec2<i32>(textureDimensions(input0));
-    let sigma = min(pf(0u), f32(max(dims.y, 8)) * 2.0);
-    let texel = vec2<i32>(id.xy);
-    let v = blur_axis(texel, vec2<i32>(0, 1), dims, sigma, false);
+    let v = acc / f32(2 * r + 1);
     textureStore(output, texel, vec4<f32>(v, 0.0, 0.0, 0.0));
 }
 

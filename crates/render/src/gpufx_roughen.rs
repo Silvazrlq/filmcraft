@@ -50,7 +50,7 @@ pub struct RoughenParams {
     pub influence: f32,
     /// Noise scale in pixels (`max(scale / 100 * 30 * px_scale, 0.5)`).
     pub scale_px: f32,
-    /// `2^stretch`, with the exponent clamped to `-16..=16` so the division stays finite.
+    /// `2^stretch`, as the CPU computes it (no clamp; a non-finite result is refused).
     pub stretch: f32,
     pub offset_x: f32,
     pub offset_y: f32,
@@ -63,9 +63,6 @@ pub struct RoughenParams {
     /// Edge colour, linear RGB.
     pub edge_color: [f32; 3],
 }
-
-/// Largest stretch exponent accepted; beyond it `2^stretch` leaves the f32 range usefully.
-const STRETCH_LIMIT: f32 = 16.0;
 
 /// Evaluates the parameters the way `roughen_edges` does.
 ///
@@ -102,7 +99,7 @@ pub fn roughen_params(input: &RoughenInput) -> Result<Option<RoughenParams>, &'s
     }
     let sigma = border_px * 0.5;
     let scale_px = (input.scale / 100.0 * 30.0 * input.px_scale).max(0.5);
-    let stretch = input.stretch.clamp(-STRETCH_LIMIT, STRETCH_LIMIT).exp2();
+    let stretch = input.stretch.exp2();
     let evolution = input.evolution / 360.0;
     if !(sigma.is_finite() && scale_px.is_finite() && stretch.is_finite() && stretch > 0.0 && evolution.is_finite()) {
         return Err("roughen: derived parameter overflows");
@@ -176,16 +173,31 @@ impl RoughenParams {
 /// The three-pass plan: blur the alpha horizontally (slot 0 -> 1), vertically (1 -> 2), then apply
 /// the roughening with the source (slot 0) and the final depth (slot 2) into slot 3. Every pass
 /// carries the same parameter block (binding 3).
-pub fn roughen_plan(params: &RoughenParams) -> MultipassPlan {
-    let block = params.uniform_bytes().to_vec();
-    MultipassPlan {
-        passes: vec![
-            Pass { kernel: "cs_roughen_blur_h", inputs: vec![Slot(0)], output: Slot(1), params: block.clone() },
-            Pass { kernel: "cs_roughen_blur_v", inputs: vec![Slot(1)], output: Slot(2), params: block.clone() },
-            Pass { kernel: "cs_roughen_apply", inputs: vec![Slot(0), Slot(2)], output: Slot(3), params: block },
-        ],
-        result: Slot(3),
+pub fn roughen_plan(params: &RoughenParams, width: u32, height: u32) -> MultipassPlan {
+    // The CPU's depth map: box radii from effects::gaussian_boxes (same caps as the CPU). Sigma
+    // at or below 0.3 means no blur there: all radii 0 (identity boxes, as box_rows does).
+    let (rx, ry) = crate::effects::gaussian_boxes(width as usize, height as usize, params.sigma, params.sigma);
+    let radius = |v: &[u32], i: usize| v.get(i).copied().unwrap_or(0);
+    let box_block = |r: u32, alpha: u32, vertical: u32| {
+        let mut b = Vec::with_capacity(16);
+        for word in [r, alpha, vertical, 0] {
+            b.extend_from_slice(&word.to_le_bytes());
+        }
+        b
+    };
+    let mut passes = Vec::with_capacity(7);
+    // horizontal boxes: slot0 alpha -> 1 -> 2 -> 3
+    for i in 0..3usize {
+        let (input, output) = (Slot(i as u8), Slot(i as u8 + 1));
+        passes.push(Pass { kernel: "cs_roughen_box", inputs: vec![input], output, params: box_block(radius(&rx, i), u32::from(i == 0), 0) });
     }
+    // vertical boxes: slot3 -> 1 -> 2 -> 3 (slot 1 and 2 are free again once the horizontal chain is read)
+    for i in 0..3usize {
+        let input = if i == 0 { Slot(3) } else { Slot(i as u8) };
+        passes.push(Pass { kernel: "cs_roughen_box", inputs: vec![input], output: Slot(i as u8 + 1), params: box_block(radius(&ry, i), 0, 1) });
+    }
+    passes.push(Pass { kernel: "cs_roughen_apply", inputs: vec![Slot(0), Slot(3)], output: Slot(4), params: params.uniform_bytes().to_vec() });
+    MultipassPlan { passes, result: Slot(4) }
 }
 
 #[cfg(test)]
@@ -210,15 +222,16 @@ mod tests {
     }
 
     #[test]
-    fn plan_is_valid_with_three_intermediate_slots() {
+    fn plan_is_valid_with_box_passes_and_four_intermediate_slots() {
         let Some(params) = roughen_params(&base()).ok().flatten() else {
             panic!("base parameters must produce an effect");
         };
-        let plan = roughen_plan(&params);
-        assert_eq!(plan.validate(), Ok(3));
-        assert_eq!(plan.passes.len(), 3);
-        assert_eq!(plan.passes.get(2).map(|p| p.inputs.clone()), Some(vec![Slot(0), Slot(2)]));
-        assert!(plan.passes.iter().all(|p| p.params.len() == UNIFORM_BYTES));
+        let plan = roughen_plan(&params, 64, 48);
+        assert_eq!(plan.validate(), Ok(4));
+        assert_eq!(plan.passes.len(), 7);
+        assert_eq!(plan.passes.last().map(|p| p.inputs.clone()), Some(vec![Slot(0), Slot(3)]));
+        assert_eq!(plan.passes.last().map(|p| p.params.len()), Some(UNIFORM_BYTES));
+        assert!(plan.passes.iter().take(6).all(|p| p.params.len() == 16));
     }
 
     #[test]
