@@ -171,13 +171,8 @@ impl BlurDissolveStage {
     ) -> wgpu::TextureView {
         let base = side * 3;
         let mut view = self.convert(device, encoder, input, size, base);
-        let mut slot = base + 1;
-        for (axis, rs) in [(0u32, &radii.0), (1u32, &radii.1)] {
-            for &radius in rs {
-                let next = self.box_pass(device, encoder, &view, radius, axis, size, slot);
-                view = next;
-                slot = if slot == base + 1 { base + 2 } else { base + 1 };
-            }
+        for (axis, radius, _, dst) in box_plan(radii, base) {
+            view = self.box_pass(device, encoder, &view, radius, axis, size, dst);
         }
         view
     }
@@ -234,4 +229,38 @@ impl BlurDissolveStage {
 fn smooth(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Box passes for one side as `(axis, radius, source slot, destination slot)`, starting from the
+/// `base` slot. Radius-0 passes are skipped: they must not flip the ping-pong slot, or a later pass
+/// would read and write the same texture.
+fn box_plan(radii: &(Vec<u32>, Vec<u32>), base: usize) -> Vec<(u32, u32, usize, usize)> {
+    let mut plan = Vec::new();
+    let (mut src, mut slot) = (base, base + 1);
+    for (axis, rs) in [(0u32, &radii.0), (1u32, &radii.1)] {
+        for &radius in rs {
+            if radius == 0 {
+                continue;
+            }
+            plan.push((axis, radius, src, slot));
+            src = slot;
+            slot = if slot == base + 1 { base + 2 } else { base + 1 };
+        }
+    }
+    plan
+}
+
+#[cfg(test)]
+mod tests {
+    use super::box_plan;
+
+    #[test]
+    fn zero_radius_pass_never_aliases_input_and_output() {
+        let plan = box_plan(&(vec![5, 0, 5], vec![0, 3]), 0);
+        assert_eq!(plan, vec![(0, 5, 0, 1), (0, 5, 1, 2), (1, 3, 2, 1)]);
+        for (_, _, src, dst) in plan {
+            assert_ne!(src, dst);
+        }
+        assert!(box_plan(&(vec![0, 0], vec![0]), 3).is_empty());
+    }
 }
