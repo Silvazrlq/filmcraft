@@ -6,16 +6,13 @@ use wgpu::util::DeviceExt;
 use crate::transition_catalog::TransitionCatalogError;
 
 type Target = (wgpu::Texture, wgpu::TextureView, (u32, u32));
+/// Full-frame Rgba32Float scratch slots `draw` uses (indices 0..=4). Slot sizes scale with the frame.
+const TEMP_TEXTURES: u64 = 5;
 
-/// Ceiling on one transition's temporaries, whatever the device allows: a guard against an accidental
-/// multi-gigabyte allocation, not a resolution limit (8K needs about 3 GB for the blur, 1 GB for light).
-const TEMP_BUDGET_CEILING_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-
-/// Budget for the temporary targets of one blur: what the device's limits say a buffer may hold
-/// (the adapter's `max_buffer_size` when the device is created from `adapter.limits()`), not a
-/// fixed guess. A size above it is refused with an error.
-fn temp_budget_bytes(limits: &wgpu::Limits) -> u64 {
-    limits.max_buffer_size.min(TEMP_BUDGET_CEILING_BYTES)
+/// Bytes of scratch textures one blur needs at `size`, or `None` when the arithmetic overflows.
+/// No artificial cap: the device decides whether it can allocate them (see `draw`).
+fn temp_bytes(size: (u32, u32)) -> Option<u64> {
+    u64::from(size.0).checked_mul(u64::from(size.1))?.checked_mul(16)?.checked_mul(TEMP_TEXTURES)
 }
 
 pub(crate) struct TransitionBlurStage {
@@ -268,14 +265,7 @@ impl TransitionBlurStage {
         op: BlurOp,
     ) -> Result<(), TransitionCatalogError> {
         let limits = device.limits();
-        let budget = temp_budget_bytes(&limits);
-        let bytes = u64::from(size.0).checked_mul(u64::from(size.1)).and_then(|n| n.checked_mul(16)).and_then(|n| n.checked_mul(6));
-        if size.0 == 0
-            || size.1 == 0
-            || size.0 > limits.max_texture_dimension_2d
-            || size.1 > limits.max_texture_dimension_2d
-            || bytes.is_none_or(|n| n > budget)
-        {
+        if size.0 == 0 || size.1 == 0 || size.0 > limits.max_texture_dimension_2d || size.1 > limits.max_texture_dimension_2d || temp_bytes(size).is_none() {
             return Err(TransitionCatalogError::InvalidSize);
         }
         if !op.gpu_ok() {
@@ -289,6 +279,10 @@ impl TransitionBlurStage {
             });
         }
         let p = op.progress;
+        // Allocation failures (scratch textures, bind groups) are captured here and returned as an error:
+        // no CPU fallback, and no panic through the device's default uncaptured-error handler.
+        let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("transition-blur") });
         let final_view = match op.kind {
             BlurKind::Dissolve => {
@@ -330,6 +324,33 @@ impl TransitionBlurStage {
         };
         self.finish(device, &mut encoder, &final_view, canvas);
         queue.submit([encoder.finish()]);
+        let validation_error = pollster::block_on(validation_scope.pop());
+        let oom_error = pollster::block_on(oom_scope.pop());
+        if let Some(error) = oom_error.or(validation_error) {
+            // The cached targets may be invalid textures now; rebuild them on the next draw.
+            self.targets = [None, None, None, None, None, None];
+            return Err(TransitionCatalogError::AllocationFailed { detail: error.to_string() });
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temp_bytes_counts_five_full_frame_slots_at_4k_and_8k() {
+        // 3840 x 2160 x 16 bytes x 5 slots = 663_552_000 bytes (about 633 MiB), above the old 512 MiB cap.
+        // The size checks (zero, max texture side) are in draw(); this only pins the arithmetic.
+        assert_eq!(temp_bytes((3840, 2160)), Some(663_552_000));
+        assert!(temp_bytes((7680, 4320)).is_some());
+    }
+
+    #[test]
+    fn an_overflowing_blur_size_is_refused_by_the_arithmetic() {
+        // (2^32 - 1)^2 x 16 x 5 overflows u64, so the request is refused without any allocation.
+        assert_eq!(temp_bytes((u32::MAX, u32::MAX)), None);
+        assert_eq!(temp_bytes((0, 0)), Some(0));
     }
 }

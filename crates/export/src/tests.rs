@@ -472,6 +472,14 @@ fn amd_required_basic_settings_reach_admission_gate() {
 }
 
 #[test]
+fn gpu_required_encoding_refuses_formats_without_a_gpu_encoder() {
+    let h264 = ExportSettings { format: Format::H264, hardware_encoding: crate::HardwareEncoding::GpuRequired, ..Default::default() };
+    assert!(h264.validate().is_ok());
+    let prores = ExportSettings { format: Format::ProRes, hardware_encoding: crate::HardwareEncoding::GpuRequired, ..Default::default() };
+    assert!(prores.validate().is_err(), "a ProRes export must not fall back to the CPU encoder");
+}
+
+#[test]
 fn runtime_ram_ceiling_passes_below_and_fails_at_or_above_90() {
     // deterministic, host-independent: the guard reads the real proc filesystem, so this test
     // does not fake readings — it only asserts the function is present and the test harness can

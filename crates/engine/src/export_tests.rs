@@ -587,22 +587,24 @@ fn jobs_and_queue_items_report_the_time_they_have_left() {
 }
 
 #[test]
-fn hardware_export_is_explicit_and_legacy_auto_is_strict() {
+fn hardware_export_is_explicit_and_legacy_auto_is_gpu_required() {
     use filmcraft_export::{GpuRendering, HardwareEncoding};
     let s = demo();
     let setting = |p: Value| crate::export_tools::settings_from_params(&s, &p, "file.exportMedia").map(|(_, st)| (st.hardware_encoding, st.gpu_rendering));
     let off = (HardwareEncoding::Off, GpuRendering::Off);
     let amd = (HardwareEncoding::AmdRequired, GpuRendering::AmdRequired);
+    let gpu_encoder = (HardwareEncoding::GpuRequired, GpuRendering::Off);
     assert_eq!(setting(json!({"path": "x.mp4"})).unwrap(), off);
-    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": "auto"})).unwrap(), amd);
+    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": "auto"})).unwrap(), gpu_encoder);
     assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": "off"})).unwrap(), off);
-    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": true})).unwrap(), amd);
+    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": true})).unwrap(), gpu_encoder);
     assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": false})).unwrap(), off);
-    assert_eq!(setting(json!({"path": "x.mp4", "gpuRendering": "auto"})).unwrap(), amd);
-    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": true, "gpuRendering": false})).unwrap(), amd);
-    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": false, "gpuRendering": "auto"})).unwrap(), amd);
-    assert_eq!(setting(json!({"path": "x.mp4", "settings": {"hardwareEncoding": "auto"}})).unwrap(), amd);
-    assert_eq!(setting(json!({"path": "x.mp4", "settings": {"gpuRendering": "auto"}})).unwrap(), amd);
+    // each legacy field is normalized on its own: an explicit gpuRendering off is kept
+    assert_eq!(setting(json!({"path": "x.mp4", "gpuRendering": "auto"})).unwrap(), (HardwareEncoding::Off, GpuRendering::Auto));
+    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": true, "gpuRendering": false})).unwrap(), gpu_encoder);
+    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": false, "gpuRendering": "auto"})).unwrap(), (HardwareEncoding::Off, GpuRendering::Auto));
+    assert_eq!(setting(json!({"path": "x.mp4", "settings": {"hardwareEncoding": "auto"}})).unwrap(), gpu_encoder);
+    assert_eq!(setting(json!({"path": "x.mp4", "settings": {"gpuRendering": "auto"}})).unwrap(), (HardwareEncoding::Off, GpuRendering::Auto));
     assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": "auto", "hardwareExport": false})).unwrap(), off);
     assert_eq!(setting(json!({"path": "x.mp4", "hardwareExport": true})).unwrap(), amd);
     let e = setting(json!({"path": "x.mp4", "hardwareExport": "yes"})).unwrap_err().to_string();

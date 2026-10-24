@@ -309,6 +309,8 @@ Wall time is about `max(render, encode + audio + mux)` instead of the sum. What 
   frames are freed as soon as they are encoded. A first try with a 1 GiB budget (16 + 16 frames of 4K SDR,
   5 + 5 of 4K HDR) raised the peak RSS of the 4K SDR exports by 80-700 MB over the old code; 512 MiB
   brings it under the old peak (table below). `Exporter::set_overlap(false)` gives the old behaviour.
+  The budget only sets the batch size: it is not a resolution limit, and export has no resolution cap
+  for 4K and above (only the project's frame-size sanity bound applies).
 - **Known web issue, not changed here.** `AudioOut::pull` moves its position before the pending check, so
   when a web export retries a batch after a pending audio source, that group of audio is lost. It is
   independent of the overlap (the web never overlaps); TODO: fix separately.
@@ -924,8 +926,9 @@ decode); AV1 internals untouched (measured only); export encoders not optimised.
   encodes). Never VA-API, never software. A refusal is an error. H.264 only on Linux; H.265 NVENC is Windows-only.
 - **CPU**: the reference route, as before.
 
-`hardwareEncoding: auto` (engine) and the legacy `--hardware-export` flag keep their meanings. The CLI gains
-`--hardware-encoding off|auto|amdRequired|nvencRequired`.
+`hardwareEncoding: gpuRequired` takes whichever GPU encoder accepts the export (NVENC H.264, or VA-API), and
+fails with an error when none does; the legacy `hardwareEncoding: auto` maps to it. The CLI gains
+`--hardware-encoding off|auto|gpuRequired|nvencRequired`; AMD-only export is `--hardware-export`.
 
 Resolution caps removed or derived from the device:
 

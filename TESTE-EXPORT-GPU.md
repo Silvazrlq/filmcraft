@@ -22,10 +22,12 @@ Crie (ou abra) uma sequência de 1920x1080 e outra de 3840x2160 no projeto de te
 ### AMD (VA-API, via DMA-BUF)
 
 ```sh
-target/release/filmcraft-cli export <saida>-amd-1080p.mp4 --format h264 --hardware-encoding amdRequired --gpu-rendering amdRequired
-target/release/filmcraft-cli export <saida>-amd-4k.mp4 --format h264 --hardware-encoding amdRequired --gpu-rendering amdRequired
-target/release/filmcraft-cli export <saida>-amd-4k-hevc.mp4 --format h265 --hardware-encoding amdRequired --gpu-rendering amdRequired
+target/release/filmcraft-cli export <saida>-amd-1080p.mp4 --format h264 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-4k.mp4 --format h264 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-4k-hevc.mp4 --format h265 --hardware-export
 ```
+
+O AMD usa `--hardware-export` (rota residente, com DMA-BUF no mesmo nó DRM da GPU AMD). Para NVIDIA use `--hardware-encoding nvencRequired`; para aceitar qualquer GPU use `--hardware-encoding gpuRequired`.
 
 Esperado: exportação concluída; `ffprobe -v error -show_streams <saida>-amd-4k.mp4` mostra 3840x2160 e
 `codec_name=h264`. Se o driver recusar, a exportação deve falhar com erro explícito. Nunca deve

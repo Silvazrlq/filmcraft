@@ -484,7 +484,7 @@ impl VaH264Encoder {
     /// itself: `None` when these settings are not a VA-API Hardware encoding job, an error when the
     /// driver declines them. No pixels pass through CPU memory.
     pub fn resident(w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<std::result::Result<Self, String>> {
-        if s.hardware_encoding != HardwareEncoding::Auto || s.video_format() != Format::H264 {
+        if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::GpuRequired) || s.video_format() != Format::H264 {
             return None;
         }
         let built = va::encode_caps(va_profile(s.h264_profile)).and_then(|caps| config(Format::H264, w, h, rate, s, &caps)).and_then(Self::new);
@@ -494,7 +494,9 @@ impl VaH264Encoder {
     /// Build a strict resident encoder on the Vulkan adapter's exact DRM render node. The VA
     /// input allocation must be single-object LINEAR NV12; no other VA display is consulted.
     pub fn resident_on_node(node: super::DrmNodeId, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<std::result::Result<Self, String>> {
-        if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::AmdRequired) || s.video_format() != Format::H264 {
+        if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::GpuRequired | HardwareEncoding::AmdRequired)
+            || s.video_format() != Format::H264
+        {
             return None;
         }
         let built = va::encode_caps_on_node(node, va_profile(s.h264_profile))

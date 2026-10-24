@@ -431,7 +431,9 @@ impl VaHevcEncoder {
     /// settings are not an AMD-required or auto HEVC job, an error when the node's driver declines
     /// them or cannot allocate a single-object LINEAR NV12 input. No pixels pass through CPU memory.
     pub fn resident_on_node(node: super::DrmNodeId, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<std::result::Result<Self, String>> {
-        if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::AmdRequired) || s.video_format() != Format::Hevc {
+        if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::GpuRequired | HardwareEncoding::AmdRequired)
+            || s.video_format() != Format::Hevc
+        {
             return None;
         }
         let built = va::hevc_encode_caps_on_node(node).and_then(|caps| config(w, h, rate, s, &caps).and_then(|c| Self::new_resident_linear(c, &caps, node)));
@@ -509,7 +511,9 @@ impl VideoEncoder for VaHevcEncoder {
 
 /// Choosing HEVC is the hardware opt-in, including with the H.264 hardware toggle off.
 pub fn factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<Result<Box<dyn VideoEncoder>>> {
-    if format != Format::Hevc || s.hardware_encoding == HardwareEncoding::NvencRequired {
+    // The CPU-rendered path opens the default VA display, so it cannot honour an AMD-only request
+    // (that one takes the AMD-pinned resident route) nor an NVIDIA-only one
+    if format != Format::Hevc || matches!(s.hardware_encoding, HardwareEncoding::NvencRequired | HardwareEncoding::AmdRequired) {
         return None;
     }
     let built = VaHevcEncoder::resident(w, h, rate, s)?;

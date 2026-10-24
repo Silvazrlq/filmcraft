@@ -240,7 +240,7 @@ fn factory_with(
     s: &ExportSettings,
     open: impl FnOnce(&Config) -> std::result::Result<Nvenc, String>,
 ) -> Option<Result<Box<dyn VideoEncoder>>> {
-    if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::NvencRequired) || format != Format::H264 {
+    if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::GpuRequired | HardwareEncoding::NvencRequired) || format != Format::H264 {
         return None;
     }
     let declined = |why: &str| {

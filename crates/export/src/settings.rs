@@ -73,6 +73,9 @@ pub enum HardwareEncoding {
     /// Use the hardware encoder when the system has one and it takes the settings; otherwise the
     /// software encoder.
     Auto,
+    /// Require a GPU video encoder and never the CPU: NVENC H.264 (NVIDIA) or VA-API H.264 / H.265 (AMD,
+    /// Intel). Whichever accepts the export takes it; when none does, the export fails with an error.
+    GpuRequired,
     /// Require the AMD VA-API encoder. Never use NVENC or the software encoder.
     AmdRequired,
     /// Require the NVIDIA NVENC encoder (H.264 on Linux and Windows). Never use VA-API or the software

@@ -267,12 +267,15 @@ pub(crate) fn hdr_output(working_hdr: bool, sdr: bool, format: Format, hdr_avail
 }
 
 fn make_venc(settings: &ExportSettings, w: u32, h: u32, rate: FrameRate) -> Result<Box<dyn VideoEncoder>> {
-    video_factories()
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .find_map(|fac| fac(settings.video_format(), w, h, rate, settings))
-        .ok_or_else(|| ExportError::Unsupported(format!("{} encoder not available yet", settings.video_format().label())))?
+    video_factories().read().unwrap_or_else(|e| e.into_inner()).iter().find_map(|fac| fac(settings.video_format(), w, h, rate, settings)).ok_or_else(|| {
+        let label = settings.video_format().label();
+        ExportError::Unsupported(match settings.hardware_encoding {
+            crate::HardwareEncoding::GpuRequired => format!("no GPU encoder (NVENC or VA-API) took this {label} export; the CPU is not used"),
+            crate::HardwareEncoding::AmdRequired => format!("the AMD VA-API encoder did not take this {label} export; the CPU is not used"),
+            crate::HardwareEncoding::NvencRequired => format!("NVENC did not take this {label} export; the CPU is not used"),
+            _ => format!("{label} encoder not available yet"),
+        })
+    })?
 }
 
 impl Exporter {
@@ -905,14 +908,18 @@ mod tests {
 
     fn nvenc_fake(format: Format, w: u32, h: u32, _: FrameRate, s: &ExportSettings) -> Option<crate::Result<Box<dyn VideoEncoder>>> {
         let present = NVIDIA_PRESENT.load(Ordering::SeqCst);
-        (present && format == Format::H264 && (w, h) == MATRIX_SIZE && matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::NvencRequired))
-            .then(|| Ok(Box::new(Fake(9001)) as Box<dyn VideoEncoder>))
+        (present
+            && format == Format::H264
+            && (w, h) == MATRIX_SIZE
+            && matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::GpuRequired | HardwareEncoding::NvencRequired))
+        .then(|| Ok(Box::new(Fake(9001)) as Box<dyn VideoEncoder>))
     }
 
     fn vaapi_fake(format: Format, w: u32, h: u32, _: FrameRate, s: &ExportSettings) -> Option<crate::Result<Box<dyn VideoEncoder>>> {
         let present = AMD_PRESENT.load(Ordering::SeqCst);
         let codec = matches!(format, Format::H264 | Format::Hevc);
-        (present && codec && (w, h) == MATRIX_SIZE && s.hardware_encoding == HardwareEncoding::Auto).then(|| Ok(Box::new(Fake(9002)) as Box<dyn VideoEncoder>))
+        (present && codec && (w, h) == MATRIX_SIZE && matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::GpuRequired))
+            .then(|| Ok(Box::new(Fake(9002)) as Box<dyn VideoEncoder>))
     }
 
     /// The time scale of the encoder `make_venc` picks, or its error text.
@@ -968,6 +975,15 @@ mod tests {
         NVIDIA_PRESENT.store(false, Ordering::SeqCst);
         let err = chosen_for(Format::H264, HardwareEncoding::NvencRequired);
         assert!(err.is_err(), "NVENC required without NVENC must fail, got {err:?}");
+        // GPU required: NVENC takes H.264 when present, and an absent GPU encoder is an error, never CPU
+        NVIDIA_PRESENT.store(true, Ordering::SeqCst);
+        assert_eq!(chosen_for(Format::H264, HardwareEncoding::GpuRequired), Ok(9001), "GPU required takes NVENC");
+        NVIDIA_PRESENT.store(false, Ordering::SeqCst);
+        AMD_PRESENT.store(false, Ordering::SeqCst);
+        assert!(chosen_for(Format::H264, HardwareEncoding::GpuRequired).is_err(), "GPU required without a GPU encoder fails");
+        AMD_PRESENT.store(true, Ordering::SeqCst);
+        assert_eq!(chosen_for(Format::H264, HardwareEncoding::GpuRequired), Ok(9002), "GPU required takes VA-API without NVENC");
+        AMD_PRESENT.store(false, Ordering::SeqCst);
         // AMD required never reaches NVENC
         NVIDIA_PRESENT.store(true, Ordering::SeqCst);
         AMD_PRESENT.store(false, Ordering::SeqCst);

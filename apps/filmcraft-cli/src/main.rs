@@ -94,7 +94,7 @@ async fn listen_for_signals() {
         }
         if !EXPORTING.load(Ordering::SeqCst) {
             diag(format_args!("filmcraft-cli: interrupted"));
-            std::process::exit(status);
+            exit_process(status);
         }
         STOP.store(status, Ordering::SeqCst);
     }
@@ -133,7 +133,7 @@ SUBCOMMANDS
   inspect [project|sequence]    project tree or active sequence as JSON (default: both)
   import <file>...              import media into the project
   export <out> [--preset name] [--format f] [--range r] [--start s --end s] [--settings json]
-         [--hardware-export] [--hardware-encoding off|auto|amdRequired|nvencRequired]
+         [--hardware-export] [--hardware-encoding off|auto|gpuRequired|amdRequired|nvencRequired]
          [--scale f] [--quality 0-100] [--no-audio] [--queue] [--allow-offline]
                                 export the active sequence and wait for it to finish: with an
                                 export preset (`export --list-presets`; built-in or the user's), or
@@ -141,9 +141,10 @@ SUBCOMMANDS
                                 from the extension); --range entire|inOut|workArea, or a custom
                                 range in seconds; --hardware-export requires AMD GPU rendering and
                                 same-node VA-API and fails if either is unavailable;
-                                --hardware-encoding picks the encoder instead: amdRequired (AMD
-                                VA-API), nvencRequired (NVIDIA NVENC, with CPU rendering; fails
-                                closed, never falls back to the CPU encoder), auto or off, and
+                                --hardware-encoding picks the encoder instead: gpuRequired (NVENC
+                                or VA-API, whichever takes it), nvencRequired (NVIDIA NVENC, with CPU
+                                rendering; fails closed, never falls back to the CPU encoder), auto or
+                                off (AMD VA-API alone is --hardware-export), and
                                 it does not combine with --hardware-export or --gpu-rendering;
                                 --settings is
                                 ExportSettings JSON merged over the
@@ -224,6 +225,23 @@ fn fail(msg: impl std::fmt::Display) -> ! {
     exit_process(1)
 }
 
+/// Creates the AMD export provider the first time an export command runs, so startup, help, listings and
+/// inspection never pay for the GPU renderer. A failed creation leaves the provider unset: an export that
+/// requires AMD is then refused, never run on the CPU.
+#[cfg(target_os = "linux")]
+fn ensure_amd_export_provider(s: &mut Session) {
+    if s.amd_export_provider.is_some() {
+        return;
+    }
+    if let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {
+        let (adapter, _, _) = renderer.wgpu_handles();
+        s.amd_export_provider = Some(filmcraft_platform::amd_export_provider(adapter));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_amd_export_provider(_: &mut Session) {}
+
 /// Where commands go: an in-process session, or the desktop app's control channel.
 enum Backend {
     Local(Box<Session>),
@@ -239,11 +257,6 @@ impl Backend {
             return Backend::Bridge(BridgeClient::new(addr).unwrap_or_else(|e| usage(e)));
         }
         let mut s = Session::default();
-        #[cfg(target_os = "linux")]
-        if let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {
-            let (adapter, _, _) = renderer.wgpu_handles();
-            s.amd_export_provider = Some(filmcraft_platform::amd_export_provider(adapter));
-        }
         // user export presets (and other per-user libraries) from the data directory
         if let Some(dir) = a.opt("--data-dir").map(std::path::PathBuf::from).or_else(filmcraft_engine::autosave::default_data_dir) {
             s.export_presets.set_dir(&dir);
@@ -263,6 +276,9 @@ impl Backend {
             // this process exits after the command, so a background export would never be written:
             // long commands wait unless the caller says otherwise (#2342)
             Backend::Local(s) => {
+                if matches!(id, "file.exportMedia" | "export.quick") || id.starts_with("export.queue.") {
+                    ensure_amd_export_provider(s);
+                }
                 if filmcraft_automation::long_job::LONG_COMMANDS.contains(&id)
                     && let Some(p) = params.as_object_mut()
                 {
@@ -357,8 +373,9 @@ fn register_hardware_decoders() -> filmcraft_platform::Availability {
     filmcraft_platform::register()
 }
 
-/// Waits at most 3 s for the startup encoder probes. Only export paths need them: the GUI reads the probe
-/// asynchronously, and the other subcommands must not pay for it.
+/// Waits at most 3 s for the startup encoder probes before exit. The probe is started for every
+/// subcommand, so every exit can wait for it (bounded): a probe still inside the GPU driver when the
+/// process ends crashes it (#crash).
 fn wait_export_probes() {
     filmcraft_platform::wait_encoder_probes(std::time::Duration::from_secs(3));
 }
@@ -675,8 +692,8 @@ async fn cli() {
                     usage("--hardware-encoding does not combine with --hardware-export or --gpu-rendering");
                 }
                 match v {
-                    "off" | "auto" | "amdRequired" | "nvencRequired" => p["hardwareEncoding"] = json!(v),
-                    _ => usage("--hardware-encoding: off | auto | amdRequired | nvencRequired"),
+                    "off" | "auto" | "gpuRequired" | "nvencRequired" => p["hardwareEncoding"] = json!(v),
+                    _ => usage("--hardware-encoding: off | auto | gpuRequired | nvencRequired (AMD only: --hardware-export)"),
                 }
             }
             let mut b = Backend::open(&a);
@@ -726,7 +743,11 @@ async fn cli() {
             let server = match a.opt("--bridge") {
                 Some(addr) => filmcraft_automation::FilmcraftMcp::bridge(addr).unwrap_or_else(|e| usage(e)),
                 None => match Backend::open(&a) {
-                    Backend::Local(s) => filmcraft_automation::FilmcraftMcp::headless(*s),
+                    Backend::Local(mut s) => {
+                        // the MCP server can run any export command, so it takes the provider up front
+                        ensure_amd_export_provider(&mut s);
+                        filmcraft_automation::FilmcraftMcp::headless(*s)
+                    }
                     Backend::Bridge(_) => usage("mcp: use --bridge ADDR to drive a running app"),
                 },
             };
