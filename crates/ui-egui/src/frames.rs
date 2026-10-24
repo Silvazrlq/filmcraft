@@ -340,15 +340,6 @@ impl Default for PlanCache {
 impl PlanCache {
     const MAX: usize = 96;
 
-    fn set_budget(&mut self, budget: usize) {
-        let budget = budget.max(MIN_CACHE_BUDGET);
-        if self.budget == budget {
-            return;
-        }
-        self.budget = budget;
-        self.evict();
-    }
-
     fn evict(&mut self) {
         if self.map.len() <= Self::MAX && self.bytes <= self.budget {
             return;
@@ -485,15 +476,6 @@ impl FrameServer {
     pub fn set_cache_budget(&self, bytes: usize) {
         let mut c = self.shared.done.lock().unwrap_or_else(|e| e.into_inner());
         c.set_budget(bytes);
-    }
-
-    pub(crate) fn set_plan_cache_budget(&self, bytes: usize) {
-        self.shared.plans.lock().unwrap_or_else(|e| e.into_inner()).set_budget(bytes);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn plan_cache_budget(&self) -> usize {
-        self.shared.plans.lock().unwrap_or_else(|e| e.into_inner()).budget
     }
 
     /// (bytes cached, budget).
@@ -1071,7 +1053,7 @@ fn render_job(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, pr
 
 #[cfg(test)]
 mod tests {
-    use super::{Cache, DEFAULT_PLAN_CACHE_BUDGET, FrameKey, PlanCache, PlaybackMeter, Target, background_work, playback_plan};
+    use super::{FrameKey, PlanCache, PlaybackMeter, Target, background_work, playback_plan};
     use filmcraft_project::ItemId;
 
     #[test]
@@ -1105,21 +1087,6 @@ mod tests {
         // 0.5 s of effects per frame at 24 fps on 6 workers: 12 frames pass while one renders,
         // so start 12 ahead, and every 3rd frame is what 6 workers can finish
         assert_eq!(playback_plan(0.5, 24.0, 6), (12, 3));
-    }
-
-    #[test]
-    fn image_and_plan_cache_budgets_restore_after_transcription() {
-        let mut images = Cache { map: Default::default(), bytes: 0, budget: 768 << 20, clock: 0 };
-        images.set_budget(64 << 20);
-        assert_eq!(images.budget, 64 << 20);
-        images.set_budget(768 << 20);
-        assert_eq!(images.budget, 768 << 20);
-
-        let mut plans = PlanCache::default();
-        plans.set_budget(64 << 20);
-        assert_eq!(plans.budget, 64 << 20);
-        plans.set_budget(DEFAULT_PLAN_CACHE_BUDGET);
-        assert_eq!(plans.budget, DEFAULT_PLAN_CACHE_BUDGET);
     }
 
     #[test]

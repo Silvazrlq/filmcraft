@@ -56,7 +56,7 @@ macro_rules! hf {
 
 const TOKENIZER_MULTI: &str = "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566";
 
-const CATALOGUE: &[ModelInfo] = &[
+static CATALOGUE: &[ModelInfo] = &[
     ModelInfo {
         id: "whisper-tiny",
         name: "Whisper tiny (multilingual)",
@@ -182,67 +182,12 @@ const CATALOGUE: &[ModelInfo] = &[
 /// The default model.
 pub const DEFAULT_MODEL: &str = "whisper-base";
 
-#[cfg(target_os = "linux")]
-macro_rules! ggml {
-    ($name:literal, $sha:literal, $size:expr) => {
-        ModelFile {
-            name: $name,
-            url: concat!("https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/", $name),
-            sha256: $sha,
-            size: $size,
-        }
-    };
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn vulkan_catalogue() -> &'static [ModelInfo] {
-    const MODELS: &[ModelInfo] = &[
-        ModelInfo { files: &[ggml!("ggml-tiny.bin", "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21", 77_691_713)], ..CATALOGUE[0] },
-        ModelInfo { files: &[ggml!("ggml-base.bin", "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", 147_951_465)], ..CATALOGUE[1] },
-        ModelInfo { files: &[ggml!("ggml-small.bin", "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", 487_601_967)], ..CATALOGUE[2] },
-        ModelInfo {
-            id: "whisper-large-v3",
-            name: "Whisper large-v3 (multilingual, Vulkan F16)",
-            description: "1.55 B parameters. Unquantized F16 GGML weights for large-v3.",
-            source: "https://huggingface.co/openai/whisper-large-v3",
-            files: &[ggml!("ggml-large-v3.bin", "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2", 3_095_033_483)],
-            ..CATALOGUE[2]
-        },
-        ModelInfo {
-            id: "whisper-large-v3-q5_0",
-            name: "Whisper large-v3 (multilingual, Vulkan Q5_0)",
-            description: "1.55 B parameters. Quantized Q5_0 GGML weights for full large-v3.",
-            source: "https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1",
-            files: &[ggml!("ggml-large-v3-q5_0.bin", "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1", 1_081_140_203)],
-            ..CATALOGUE[2]
-        },
-        ModelInfo {
-            id: "whisper-large-v3-turbo",
-            name: "Whisper large-v3 Turbo (multilingual, Vulkan F16)",
-            description: "809 M parameters. Faster than large-v3; accuracy varies by language and audio.",
-            source: "https://huggingface.co/openai/whisper-large-v3-turbo",
-            files: &[ggml!("ggml-large-v3-turbo.bin", "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69", 1_624_555_275)],
-            ..CATALOGUE[2]
-        },
-    ];
-    MODELS
-}
-
 pub fn catalogue() -> &'static [ModelInfo] {
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("FILMCRAFT_WHISPER_VULKAN").is_some() {
-        return vulkan_catalogue();
-    }
     CATALOGUE
 }
 
-/// Model choices available through the currently configured backend.
-pub fn settings_choices() -> Vec<(&'static str, &'static str)> {
-    catalogue().iter().map(|m| (m.id, m.name)).collect()
-}
-
 pub fn find(id: &str) -> Option<&'static ModelInfo> {
-    catalogue().iter().find(|m| m.id == id)
+    CATALOGUE.iter().find(|m| m.id == id)
 }
 
 /// Where model `m` lives under `models_dir`.
@@ -355,7 +300,7 @@ mod tests {
     #[test]
     fn catalogue_is_pinned_and_checksummed() {
         assert!(find(DEFAULT_MODEL).is_some());
-        for m in CATALOGUE {
+        for m in catalogue() {
             assert!(m.size() > 100_000_000, "{}", m.id);
             for f in m.files {
                 assert!(f.url.starts_with("https://huggingface.co/openai/whisper-"), "{}", f.url);
@@ -367,36 +312,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn vulkan_catalogue_pins_large_v3_without_reordering_existing_models() {
-        let models = vulkan_catalogue();
-        assert_eq!(
-            models.iter().map(|m| m.id).collect::<Vec<_>>(),
-            vec!["whisper-tiny", "whisper-base", "whisper-small", "whisper-large-v3", "whisper-large-v3-q5_0", "whisper-large-v3-turbo"]
-        );
-        let model = models.iter().find(|m| m.id == "whisper-large-v3").expect("large-v3 metadata");
-        let file = model.files.first().expect("large-v3 GGML file");
-        assert_eq!(file.name, "ggml-large-v3.bin");
-        assert_eq!(file.size, 3_095_033_483);
-        assert_eq!(file.sha256, "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2");
-        assert_eq!(file.url, "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3.bin");
-        assert!(model.multilingual);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn vulkan_catalogue_pins_multilingual_large_v3_turbo() {
-        let model = vulkan_catalogue().last().expect("turbo metadata");
-        let file = model.files.first().expect("turbo GGML file");
-        assert_eq!(model.id, "whisper-large-v3-turbo");
-        assert!(model.multilingual);
-        assert_eq!(file.name, "ggml-large-v3-turbo.bin");
-        assert_eq!(file.size, 1_624_555_275);
-        assert_eq!(file.sha256, "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69");
-        assert_eq!(file.url, "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin");
     }
 
     #[test]

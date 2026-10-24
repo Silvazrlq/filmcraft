@@ -23,9 +23,7 @@ class InstallTests(unittest.TestCase):
         self.bundle = self.root / "extracted bundle"
         (self.bundle / "bin").mkdir(parents=True)
         (self.bundle / "lib/filmcraft").mkdir(parents=True)
-        (self.bundle / "lib/filmcraft/voice-worker").mkdir(parents=True)
         (self.bundle / "lib/filmcraft/filmcraft-bin").write_text("runtime fixture\n")
-        (self.bundle / "lib/filmcraft/voice-worker/transcription.py").write_text("worker fixture\n")
         self.share = self.bundle / "share"
         (self.share / "applications").mkdir(parents=True)
         shutil.copyfile(HERE / "install.sh", self.bundle / "install.sh")
@@ -64,7 +62,6 @@ class InstallTests(unittest.TestCase):
                 )
             self.assertEqual((prefix / "share/doc/filmcraft/LICENSE-MIT").read_text(), version)
             self.assertEqual((prefix / "lib/filmcraft/filmcraft-bin").read_text(), "runtime fixture\n")
-            self.assertEqual((prefix / "lib/filmcraft/voice-worker/transcription.py").read_text(), "worker fixture\n")
             self.assertTrue((prefix / "share/icons/hicolor/test").is_file())
             self.assertTrue((prefix / "share/mime/packages/test.xml").is_file())
             self.assertEqual(other.read_text(), "unrelated\n")

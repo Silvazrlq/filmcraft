@@ -8,14 +8,14 @@ trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
 stage="$tmp/stage"
 usr="$stage/usr/lib/filmcraft"
 mkdir -p "$usr"
-for binary in filmcraft-bin filmcraft-cli-bin whisper-cli; do
+for binary in filmcraft-bin filmcraft-cli-bin; do
     cp /usr/bin/true "$usr/$binary"
 done
 "$here/package-arch.sh" "$stage" "$tmp/out" 0.11.0-1
 pkg="$tmp/out/filmcraft-0.11.0-1-x86_64.pkg.tar.zst"
 zstd -t "$pkg" >/dev/null
 bsdtar -tf "$pkg" > "$tmp/list"
-for entry in .PKGINFO .INSTALL .MTREE usr/lib/filmcraft/filmcraft-bin usr/lib/filmcraft/filmcraft-cli-bin usr/lib/filmcraft/whisper-cli; do
+for entry in .PKGINFO .INSTALL .MTREE usr/lib/filmcraft/filmcraft-bin usr/lib/filmcraft/filmcraft-cli-bin; do
     rg -Fx "$entry" "$tmp/list" >/dev/null
 done
 bsdtar -xOf "$pkg" .INSTALL | rg -F -q 'update-mime-database'
@@ -95,7 +95,6 @@ bad="$tmp/bad-stage"
 mkdir -p "$bad/usr/lib/filmcraft"
 cp /usr/bin/true "$bad/usr/lib/filmcraft/filmcraft-bin"
 printf 'not an ELF\n' > "$bad/usr/lib/filmcraft/filmcraft-cli-bin"
-cp /usr/bin/true "$bad/usr/lib/filmcraft/whisper-cli"
 if "$here/package-arch.sh" "$bad" "$tmp/bad-out" 0.11.0-1 >/dev/null 2>&1; then
     echo 'accepted invalid ELF input' >&2
     exit 1

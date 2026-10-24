@@ -22,7 +22,7 @@ for command in readelf bsdtar gzip zstd sha256sum rg sort tail find awk date mv;
     command -v "$command" >/dev/null 2>&1 || { echo "missing package tool: $command" >&2; exit 1; }
 done
 [ -d "$usr" ] || { echo "missing staged usr tree: $usr" >&2; exit 1; }
-for file in "$usr/lib/filmcraft/filmcraft-bin" "$usr/lib/filmcraft/filmcraft-cli-bin" "$usr/lib/filmcraft/whisper-cli"; do
+for file in "$usr/lib/filmcraft/filmcraft-bin" "$usr/lib/filmcraft/filmcraft-cli-bin"; do
     [ -f "$file" ] && [ -x "$file" ] || { echo "missing executable: $file" >&2; exit 1; }
     machine=$(readelf -h "$file" 2>/dev/null | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p') || {
         echo "invalid ELF input: $file" >&2; exit 1;
@@ -35,7 +35,7 @@ done
 # Fail closed: every dynamic ELF dependency must have a known Arch package mapping.
 declare -A dependencies=()
 glibc_floor=
-for file in "$usr/lib/filmcraft/filmcraft-bin" "$usr/lib/filmcraft/filmcraft-cli-bin" "$usr/lib/filmcraft/whisper-cli"; do
+for file in "$usr/lib/filmcraft/filmcraft-bin" "$usr/lib/filmcraft/filmcraft-cli-bin"; do
     dynamic=$(readelf -d "$file" 2>/dev/null) || { echo "cannot read DT_NEEDED: $file" >&2; exit 1; }
     while IFS= read -r soname; do
         [ -n "$soname" ] || continue

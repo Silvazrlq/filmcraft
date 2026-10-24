@@ -35,12 +35,6 @@ if [ -n "$arch_package_dir" ]; then
 fi
 x86_bins=${FILMCRAFT_BIN_DIR_X86_64:-}
 arm_bins=${FILMCRAFT_BIN_DIR_AARCH64:-}
-x86_whisper=${FILMCRAFT_WHISPER_CLI_X86_64:-}
-arm_whisper=${FILMCRAFT_WHISPER_CLI_AARCH64:-}
-x86_stdlib_deb=${FILMCRAFT_LIBSTDCXX_DEB_X86_64:-}
-arm_stdlib_deb=${FILMCRAFT_LIBSTDCXX_DEB_AARCH64:-}
-voice_worker=${FILMCRAFT_VOICE_WORKER_DIR:-$repo_root/voice-worker}
-whisper_source=${FILMCRAFT_WHISPER_SOURCE_DIR:-$repo_root/worker-vulkan}
 work_base=${FILMCRAFT_DEB_WORK:-$CARGO_TARGET_DIR/deb-multiarch}
 version=${FILMCRAFT_PACKAGE_VERSION:-$VERSION-1}
 arch_version=${FILMCRAFT_ARCH_PACKAGE_VERSION:-$VERSION-1}
@@ -48,12 +42,12 @@ app_id=ai.storyteller.filmcraft
 
 for arch in "${architectures[@]}"; do
     case "$arch" in
-        x86_64) values=("$x86_bins" "$x86_whisper" "$x86_stdlib_deb") ;;
-        aarch64) values=("$arm_bins" "$arm_whisper" "$arm_stdlib_deb") ;;
+        x86_64) values=("$x86_bins") ;;
+        aarch64) values=("$arm_bins") ;;
     esac
     for value in "${values[@]}"; do
         [ -n "$value" ] || {
-            echo "Set real binary, whisper-cli and libstdc++6 package inputs for selected architecture $arch." >&2
+            echo "Set the real binary directory for selected architecture $arch." >&2
             exit 2
         }
     done
@@ -101,41 +95,12 @@ max_symbol_version() {
     printf '%s\n' "$result"
 }
 
-check_stdlib_package() {
-    deb=$1 required=$2 arch=$3
-    [ -f "$deb" ] || { echo "missing $arch libstdc++6 package: $deb" >&2; return 1; }
-    actual_arch=$(dpkg-deb -f "$deb" Architecture)
-    [ "$actual_arch" = "$arch" ] || { echo "wrong libstdc++6 package architecture: $actual_arch (expected $arch)" >&2; return 1; }
-    package_version=$(dpkg-deb -f "$deb" Version)
-    extracted=$work/$arch/libstdcxx
-    mkdir -p "$extracted"
-    dpkg-deb -x "$deb" "$extracted"
-    library=$(find "$extracted" -type f -name 'libstdc++.so.6*' | head -n 1)
-    [ -n "$library" ] || { echo "no libstdc++.so.6 in $deb" >&2; return 1; }
-    readelf --version-info --wide "$library" | rg -F "Name: $required" >/dev/null || {
-        echo "$deb does not provide required $required" >&2; return 1;
-    }
-    cxxabi_required=$(max_symbol_version CXXABI_ "$bins/filmcraft" "$bins/filmcraft-cli" "$whisper")
-    readelf --version-info --wide "$library" | rg -F "Name: $cxxabi_required" >/dev/null || {
-        echo "$deb does not provide required $cxxabi_required" >&2; return 1;
-    }
-    printf '%s\n' "$package_version"
-}
-
 package_arch() {
-    rust_arch=$1 deb_arch=$2 expected=$3 bins=$4 whisper=$5 stdlib_deb=$6
+    rust_arch=$1 deb_arch=$2 expected=$3 bins=$4
     for name in filmcraft filmcraft-cli; do
         [ -f "$bins/$name" ] || { echo "missing $rust_arch binary: $bins/$name" >&2; return 1; }
     done
-    [ -f "$whisper" ] || { echo "missing whisper-cli: $whisper" >&2; return 1; }
-    for file in "$voice_worker/transcription.py" "$voice_worker/isolation.py" \
-        "$voice_worker/README-transcription.md" "$voice_worker/requirements-transcription-nvidia.txt" \
-        "$voice_worker/requirements-isolation.txt" "$voice_worker/readme-isolation.md" \
-        "$whisper_source/LICENSE" "$whisper_source/AUTHORS"; do
-        [ -f "$file" ] || { echo "missing validated worker source file: $file" >&2; return 1; }
-    done
-
-    for file in "$bins/filmcraft" "$bins/filmcraft-cli" "$whisper"; do
+    for file in "$bins/filmcraft" "$bins/filmcraft-cli"; do
         machine=$(readelf -h "$file" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')
         case "$expected:$machine" in
             X86-64:*X86-64*) ;;
@@ -143,25 +108,16 @@ package_arch() {
             *) echo "wrong ELF architecture for $rust_arch: $file ($machine)" >&2; return 1 ;;
         esac
     done
-    glibc_floor=$(max_symbol_version GLIBC_ "$bins/filmcraft" "$bins/filmcraft-cli" "$whisper")
+    glibc_floor=$(max_symbol_version GLIBC_ "$bins/filmcraft" "$bins/filmcraft-cli")
     glibc_floor=${glibc_floor#GLIBC_}
-    stdlib_floor=$(max_symbol_version GLIBCXX_ "$bins/filmcraft" "$bins/filmcraft-cli" "$whisper")
-    stdlib_package_version=$(check_stdlib_package "$stdlib_deb" "$stdlib_floor" "$deb_arch")
 
     stage=$work/$rust_arch/root
     rm -rf -- "$stage"
     install -d "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/applications" \
         "$stage/usr/share/mime/packages" "$stage/usr/share/icons" \
-        "$stage/usr/share/doc/filmcraft" "$stage/usr/lib/filmcraft/voice-worker"
+        "$stage/usr/share/doc/filmcraft" "$stage/usr/lib/filmcraft"
     install -m 0755 "$bins/filmcraft" "$stage/usr/lib/filmcraft/filmcraft-bin"
     install -m 0755 "$bins/filmcraft-cli" "$stage/usr/lib/filmcraft/filmcraft-cli-bin"
-    install -m 0755 "$whisper" "$stage/usr/lib/filmcraft/whisper-cli"
-    install -m 0644 "$voice_worker/transcription.py" "$voice_worker/isolation.py" \
-        "$voice_worker/README-transcription.md" "$voice_worker/requirements-transcription-nvidia.txt" \
-        "$voice_worker/requirements-isolation.txt" "$stage/usr/lib/filmcraft/voice-worker/"
-    sed '/^## Validação real/,$d' "$voice_worker/readme-isolation.md" > "$stage/usr/lib/filmcraft/voice-worker/readme-isolation.md"
-    install -m 0644 "$whisper_source/LICENSE" "$stage/usr/share/doc/filmcraft/LICENSE-whisper.cpp"
-    install -m 0644 "$whisper_source/AUTHORS" "$stage/usr/share/doc/filmcraft/AUTHORS-whisper.cpp"
     install -m 0644 "$ROOT/NOTICE" "$ROOT/ATTRIBUTION.md" \
         "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$stage/usr/share/doc/filmcraft/"
     cp -R "$here/../../assets/app-icon/hicolor" "$stage/usr/share/icons/"
@@ -173,20 +129,12 @@ package_arch() {
         cat > "$stage/usr/bin/$1" <<EOF
 #!/bin/sh
 prefix=\$(CDPATH= cd -- "\$(dirname -- "\$0")/.." && pwd)
-export FILMCRAFT_WHISPER_VULKAN="\$prefix/lib/filmcraft/whisper-cli"
-export FILMCRAFT_VOICE_SCRIPT="\$prefix/lib/filmcraft/voice-worker/transcription.py"
-if [ "\${FILMCRAFT_VOICE_PYTHON+x}" != x ]; then
-    data_home=\${XDG_DATA_HOME:-\$HOME/.local/share}
-    venv_python=\$data_home/filmcraft-vulkan/voice-worker/.venv/bin/python
-    if [ -x "\$venv_python" ]; then FILMCRAFT_VOICE_PYTHON=\$venv_python; else FILMCRAFT_VOICE_PYTHON=/usr/bin/python3; fi
-    export FILMCRAFT_VOICE_PYTHON
-fi
 exec "\$prefix/lib/filmcraft/$2" "\$@"
 EOF
         chmod 0755 "$stage/usr/bin/$1"
     done
 
-    depends=$(depends_for "$bins/filmcraft" "$bins/filmcraft-cli" "$whisper")
+    depends=$(depends_for "$bins/filmcraft" "$bins/filmcraft-cli")
     cat > "$stage/DEBIAN/control" <<EOF
 Package: filmcraft
 Version: $version
@@ -194,7 +142,7 @@ Section: video
 Priority: optional
 Architecture: $deb_arch
 Maintainer: FilmCraft maintainers <filmcraft@storyteller.ai>
-Depends: $depends, libc6 (>= $glibc_floor), libstdc++6 (>= $stdlib_package_version), libgomp1, libvulkan1, libva2, libva-drm2, python3, python3-numpy, python3-scipy
+Depends: $depends, libc6 (>= $glibc_floor), libvulkan1, libva2, libva-drm2
 Description: Open-source native video editor
  Timeline editing, color grading, effects, audio mixing and export.
 EOF
@@ -220,8 +168,8 @@ work=$(mktemp -d "$work_base/build.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 for arch in "${architectures[@]}"; do
     case "$arch" in
-        x86_64) package_arch x86_64 amd64 X86-64 "$x86_bins" "$x86_whisper" "$x86_stdlib_deb" ;;
-        aarch64) package_arch aarch64 arm64 AArch64 "$arm_bins" "$arm_whisper" "$arm_stdlib_deb" ;;
+        x86_64) package_arch x86_64 amd64 X86-64 "$x86_bins" ;;
+        aarch64) package_arch aarch64 arm64 AArch64 "$arm_bins" ;;
     esac
 done
 checksum_inputs=()

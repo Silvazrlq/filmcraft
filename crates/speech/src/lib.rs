@@ -20,10 +20,6 @@ pub mod diarize;
 pub mod mel;
 pub mod models;
 pub mod vad;
-#[cfg(target_os = "linux")]
-pub mod voice;
-#[cfg(target_os = "linux")]
-pub mod vulkan;
 #[cfg(feature = "whisper")]
 pub mod whisper;
 
@@ -96,14 +92,6 @@ pub trait Transcriber: Send + Sync {
     fn id(&self) -> String;
     /// Transcribe mono 16 kHz `audio`. Word times are relative to the first sample.
     fn transcribe(&self, audio: &[f32], opts: &Options, progress: ProgressFn) -> Result<Transcript, SpeechError>;
-    /// Rate used to decode media before this recogniser's preprocessing.
-    fn input_sample_rate(&self) -> u32 {
-        SAMPLE_RATE
-    }
-    /// Preserve separate channels for recognisers that isolate vocals before downmixing.
-    fn transcribe_channels(&self, channels: &[Vec<f32>], opts: &Options, progress: ProgressFn) -> Result<Transcript, SpeechError> {
-        self.transcribe(&downmix(channels), opts, progress)
-    }
 }
 
 /// A transcriber that returns a fixed transcript (tests, demos and agents that bring their own
@@ -132,15 +120,7 @@ impl Transcriber for FixedTranscriber {
 
 /// Load the transcriber for catalogue model `id` from `models_dir` (feature `whisper`).
 pub fn load(models_dir: &std::path::Path, id: &str) -> Result<std::sync::Arc<dyn Transcriber>, SpeechError> {
-    #[cfg(target_os = "linux")]
-    if let Some(python) = std::env::var_os("FILMCRAFT_VOICE_PYTHON") {
-        return Ok(std::sync::Arc::new(voice::VoiceWorker::load_model(python.into(), id)?));
-    }
     let m = models::find(id).ok_or_else(|| SpeechError::UnknownModel(id.into()))?;
-    #[cfg(target_os = "linux")]
-    if let Some(executable) = std::env::var_os("FILMCRAFT_WHISPER_VULKAN") {
-        return Ok(std::sync::Arc::new(vulkan::VulkanWhisper::load(executable.into(), models_dir, m.id)?));
-    }
     if !models::installed(models_dir, m) {
         return Err(SpeechError::NotInstalled(id.into()));
     }

@@ -270,7 +270,6 @@ const SCREENSHOT_TIMEOUT_S: f64 = 10.0;
 /// How long `ui.screenshot` waits for the UI to settle (monitors showing their exact frames, the
 /// timeline zoom animation finished) before capturing what is there.
 const SCREENSHOT_SETTLE_MAX_S: f64 = 5.0;
-const TRANSCRIPTION_CACHE_BUDGET: usize = 64 << 20;
 
 /// Export entries that run from the menus through the save panel: command, filter label,
 /// extension.
@@ -399,7 +398,6 @@ pub struct FilmcraftApp {
     reported_jobs: std::collections::HashSet<u64>,
     /// Settings last applied to the UI (theme, tooltips, frame cache, audio device).
     applied_prefs: Option<filmcraft_engine::autosave::Preferences>,
-    applied_transcribing: Option<bool>,
     /// Settings ▸ Appearance ▸ UI Scale last applied, with the system scale it was applied for.
     applied_ui_scale: Option<(Option<f32>, f32)>,
     workspace_restored: bool,
@@ -625,7 +623,6 @@ impl FilmcraftApp {
             watched_render: None,
             reported_jobs: Default::default(),
             applied_prefs: None,
-            applied_transcribing: None,
             applied_ui_scale: None,
             workspace_restored: false,
             workspaces,
@@ -663,7 +660,6 @@ impl FilmcraftApp {
             self.tl.reset_media_caches();
             // the new frame server needs the Memory settings
             self.applied_prefs = None;
-            self.applied_transcribing = None;
         }
     }
 
@@ -736,17 +732,12 @@ impl FilmcraftApp {
             }
         }
         let p = self.session.prefs.clone();
-        let transcribing = self.session.is_transcribing();
         // checked every frame: a theme or font change installs the style again
         let animation = if p.appearance.animations { theme::ANIMATION_TIME } else { 0.0 };
         if ctx.global_style().animation_time != animation {
             ctx.global_style_mut(|s| s.animation_time = animation);
         }
         if self.applied_prefs.as_ref() == Some(&p) {
-            if self.applied_transcribing != Some(transcribing) {
-                self.apply_memory_cache_budgets(&p, transcribing);
-                self.applied_transcribing = Some(transcribing);
-            }
             return;
         }
         let prev = self.applied_prefs.take();
@@ -776,6 +767,7 @@ impl FilmcraftApp {
             }
             i18n::set_current(self.ui.language);
         }
+        self.frames.set_cache_budget(p.memory.frame_cache_mb as usize * (1 << 20));
         self.ui.play_after_render = p.timeline.play_after_rendering;
         let hardware_changed = prev.as_ref().is_none_or(|q| q.audio_hardware != p.audio_hardware);
         let pitch_changed = prev.as_ref().is_some_and(|q| q.audio.maintain_pitch_shuttling != p.audio.maintain_pitch_shuttling);
@@ -806,15 +798,7 @@ impl FilmcraftApp {
                 self.set_workspace(&w);
             }
         }
-        self.apply_memory_cache_budgets(&p, transcribing);
-        self.applied_transcribing = Some(transcribing);
         self.applied_prefs = Some(p);
-    }
-
-    fn apply_memory_cache_budgets(&self, prefs: &filmcraft_engine::autosave::Preferences, transcribing: bool) {
-        let image_budget = (prefs.memory.frame_cache_mb as usize).saturating_mul(1 << 20);
-        self.frames.set_cache_budget(if transcribing { image_budget.min(TRANSCRIPTION_CACHE_BUDGET) } else { image_budget });
-        self.frames.set_plan_cache_budget(if transcribing { TRANSCRIPTION_CACHE_BUDGET } else { frames::DEFAULT_PLAN_CACHE_BUDGET });
     }
 
     /// Every sequence has its own Timeline view (zoom, scroll, track heights), as Premiere's
@@ -2989,77 +2973,5 @@ mod native_menu_tests {
         app.sync_native_menu();
         assert_eq!(last(&sent, "edit.undo"), Some(false));
         assert_eq!(last(&sent, "edit.redo"), Some(true), "the undone edit can be redone");
-    }
-}
-
-#[cfg(test)]
-mod transcription_memory_tests {
-    use super::*;
-    use filmcraft_project::{Transcript, Word};
-    use filmcraft_speech::{Options, SpeechError, Transcriber};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc::SyncSender;
-
-    struct GatedTranscriber {
-        entered: SyncSender<()>,
-        release: Arc<AtomicBool>,
-    }
-
-    impl Transcriber for GatedTranscriber {
-        fn id(&self) -> String {
-            "memory-test".into()
-        }
-        fn transcribe(&self, _: &[f32], _: &Options, progress: filmcraft_speech::ProgressFn) -> Result<Transcript, SpeechError> {
-            if !progress(0.5, "Waiting") {
-                return Err(SpeechError::Cancelled);
-            }
-            let _ = self.entered.send(());
-            while !self.release.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            Ok(Transcript { language: "en".into(), words: vec![Word::new("hello", Tick::ZERO, Tick::from_seconds_f64(0.2))], ..Default::default() })
-        }
-    }
-
-    struct ReleaseOnDrop(Arc<AtomicBool>);
-
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::Relaxed);
-        }
-    }
-
-    #[test]
-    fn transcription_temporarily_reduces_and_restores_ui_cache_budgets() {
-        let mut session = Session::default();
-        session.execute("file.openDemoProject", json!({})).unwrap();
-        let item = session.active_sequence().unwrap().audio_tracks[0].items[0].item;
-        let (entered, entered_rx) = std::sync::mpsc::sync_channel(0);
-        let release = Arc::new(AtomicBool::new(false));
-        let _release_on_drop = ReleaseOnDrop(release.clone());
-        session.transcriber = Some(Arc::new(GatedTranscriber { entered, release: release.clone() }));
-        session.execute("transcript.generate", json!({"item":item.0,"background":true,"diarize":false})).unwrap();
-
-        let mut app = FilmcraftApp::new(session);
-        let image_pref = app.session.prefs.memory.frame_cache_mb;
-        entered_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        app.apply_prefs(&egui::Context::default());
-        assert!(app.session.is_transcribing());
-        assert_eq!(app.session.prefs.memory.frame_cache_mb, image_pref);
-        assert_eq!(app.frames.cache_usage().1, 64 << 20);
-        assert_eq!(app.frames.plan_cache_budget(), 64 << 20);
-
-        release.store(true, Ordering::Relaxed);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while app.session.is_transcribing() {
-            app.session.poll_persistence();
-            assert!(std::time::Instant::now() < deadline, "transcription did not finish");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        app.apply_prefs(&egui::Context::default());
-        assert_eq!(app.session.prefs.memory.frame_cache_mb, image_pref);
-        assert_eq!(app.frames.cache_usage().1, image_pref as usize * (1 << 20));
-        assert_eq!(app.frames.plan_cache_budget(), 1 << 30);
     }
 }
