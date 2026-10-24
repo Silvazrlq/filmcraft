@@ -589,6 +589,12 @@ pub const GPU_EFFECTS: &[&str] = &[
     "drop_shadow",
 ];
 
+/// Video ids whose multi-pass GPU route is planned but not measured on the AMD adapter. Every id here
+/// is refused by [`evaluate_gpu_effect`] (absent from [`GPU_EFFECTS`]) until its parity case passes.
+/// `posterize_time` and `compound_blur` need a frame of another instant or a track image, so they
+/// stay here as design-only entries; see TESTE-GPU-MULTIPASS.md.
+pub const UNMEASURED_GPU_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "roughen_edges", "spacer", "compound_blur", "posterize_time"];
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EffectGpuFailure {
     UnknownId,
@@ -2114,6 +2120,16 @@ mod tests {
             for (a, b) in expected.px.iter().zip(&actual.px) {
                 assert!((a - b).abs() <= 1e-6, "custom={custom}: {a} != {b}");
             }
+        }
+    }
+
+    #[test]
+    fn unmeasured_routes_are_never_in_the_gpu_allowlist() {
+        for id in UNMEASURED_GPU_ROUTES {
+            assert!(!GPU_EFFECTS.contains(id), "{id} is unmeasured and must not be routed to the GPU");
+            let def = filmcraft_project::effect_defs().iter().find(|d| d.id == *id).expect("registered id");
+            let outcome = evaluate_gpu_effect(&def.instance(), &catalog_context(), 9, 7);
+            assert!(!matches!(outcome, EffectGpuOutcome::Eligible(_)), "{id} classified as eligible");
         }
     }
 
