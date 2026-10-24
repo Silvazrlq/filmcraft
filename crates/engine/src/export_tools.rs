@@ -259,7 +259,7 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
                     HardwareEncoding::Off
                 }
             }
-            other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "hardwareEncoding: off | auto | amdRequired"))?,
+            other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "hardwareEncoding: off | auto | gpuRequired | amdRequired"))?,
         };
     }
     if let Some(v) = p.get("gpuRendering") {
@@ -277,9 +277,10 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
     if let Some(value) = p.get("hardwareExport") {
         let enabled = value.as_bool().ok_or_else(|| bad(cmd, "hardwareExport must be a boolean"))?;
         settings.set_hardware_export(enabled);
-    } else {
-        // Legacy serialized settings may contain Auto; normalize every enabled request to strict AMD mode.
-        settings.set_hardware_export(settings.gpu_rendering != GpuRendering::Off || settings.hardware_encoding != HardwareEncoding::Off);
+    } else if settings.hardware_encoding == HardwareEncoding::Auto {
+        // Legacy `auto` asks for a hardware encoder and never the CPU: GpuRequired, not the software-
+        // fallback Auto. Each field is normalized on its own, so an explicit `gpuRendering: off` is kept.
+        settings.hardware_encoding = HardwareEncoding::GpuRequired;
     }
     if let Some(v) = bool_p(p, "burnCaptions") {
         settings.burn_captions = v;

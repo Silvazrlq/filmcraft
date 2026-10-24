@@ -430,7 +430,9 @@ impl VaHevcEncoder {
     /// settings are not an AMD-required or auto HEVC job, an error when the node's driver declines
     /// them or cannot allocate a single-object LINEAR NV12 input. No pixels pass through CPU memory.
     pub fn resident_on_node(node: super::DrmNodeId, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<std::result::Result<Self, String>> {
-        if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::AmdRequired) || s.video_format() != Format::Hevc {
+        if !matches!(s.hardware_encoding, HardwareEncoding::Auto | HardwareEncoding::GpuRequired | HardwareEncoding::AmdRequired)
+            || s.video_format() != Format::Hevc
+        {
             return None;
         }
         let built = va::hevc_encode_caps_on_node(node).and_then(|caps| config(w, h, rate, s, &caps).and_then(|c| Self::new_resident_linear(c, &caps, node)));

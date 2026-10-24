@@ -1223,6 +1223,10 @@ impl ExportSettings {
         if self.gpu_rendering == GpuRendering::AmdRequired && !matches!(self.video_format(), Format::H264 | Format::Hevc) {
             return Err(ExportError::Unsupported("AMD required mode supports VA-API H.264 or HEVC exports only".into()));
         }
+        // GPU-required encoding has no software encoder to fall back to, so only the VA-API formats can run.
+        if self.hardware_encoding == HardwareEncoding::GpuRequired && !matches!(self.video_format(), Format::H264 | Format::Hevc) {
+            return Err(ExportError::Unsupported("GPU-required encoding supports VA-API H.264 or HEVC exports only".into()));
+        }
         if let Some(range) = self.range {
             validate_range(range)?;
         }
@@ -2294,7 +2298,8 @@ pub(crate) fn h264_slices(height: u32) -> usize {
 }
 
 fn h264_factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<Result<Box<dyn VideoEncoder>>> {
-    if format != Format::H264 || s.hardware_encoding == HardwareEncoding::AmdRequired {
+    // GPU-required modes never get the software encoder: no hardware factory means an error, not CPU.
+    if format != Format::H264 || matches!(s.hardware_encoding, HardwareEncoding::AmdRequired | HardwareEncoding::GpuRequired) {
         return None;
     }
     let mut cfg = filmcraft_h264enc::EncoderConfig::new(w, h, rate.num as u32, rate.den as u32);
