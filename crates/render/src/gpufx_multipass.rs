@@ -153,14 +153,32 @@ pub struct MultipassEffect {
     pub plan: MultipassPlan,
 }
 
-/// Builds the route for `id`, if one is registered. None until a port adds its arm.
-pub fn multipass_effect_for(id: &str) -> Option<MultipassEffect> {
-    let _ = id;
-    None
+/// Builds the route for `id` on a `width` x `height` frame, if one is registered. The plan depends
+/// on the frame size (view rectangles, vertical radii), so it is built for the size it will run at.
+/// The parameters are the fixed sample values of the parity case (see `MULTIPASS_ROUTES`); they are
+/// not yet read from the effect instance.
+pub fn multipass_effect_for(id: &str, width: u32, height: u32) -> Option<MultipassEffect> {
+    use crate::vfx::{VR_KERNEL_COL, VR_KERNEL_COPY, VR_KERNEL_DENOISE, VR_KERNEL_ROW, VR_KERNEL_SHARPEN, VrKind, vr_plan};
+    const VR_KERNELS: &[&str] = &[VR_KERNEL_ROW, VR_KERNEL_COL, VR_KERNEL_COPY, VR_KERNEL_SHARPEN, VR_KERNEL_DENOISE];
+    // Same WGSL module as crates/gpu/src/vr.wgsl; the render crate does not depend on filmcraft-gpu.
+    const VR_WGSL: &str = include_str!("../../gpu/src/vr.wgsl");
+    let kind = match id {
+        // blurriness 4 at px_scale 1: sigma 2
+        "vr_blur" => VrKind::Blur { sigma: 2.0 },
+        // amount 60: 0.6, sharpen sigma 1.2 at px_scale 1
+        "vr_sharpen" => VrKind::Sharpen { sigma: 1.2, amount: 0.6 },
+        // amount 50: level 0.5, sigma 0.5 * 1.8, threshold 0.02 + 0.5 * 0.12
+        "vr_denoise" => VrKind::Denoise { sigma: 0.9, threshold: 0.08, show: false },
+        _ => return None,
+    };
+    let plan = vr_plan(kind, 0, usize::try_from(width).ok()?, usize::try_from(height).ok()?)?;
+    let id = MULTIPASS_ROUTES.iter().copied().find(|r| *r == id)?;
+    Some(MultipassEffect { id, wgsl: VR_WGSL, kernels: VR_KERNELS, plan })
 }
 
-/// Routes that have a plan, kernel and CPU parity case. Empty until a port lands; the classifier in gpufx.rs still refuses every id.
-pub const MULTIPASS_ROUTES: &[&str] = &[];
+/// Routes that have a plan, kernel and CPU parity case. Each id stays in
+/// `filmcraft_render::gpufx::UNMEASURED_GPU_ROUTES`, so the classifier still refuses it.
+pub const MULTIPASS_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise"];
 
 #[cfg(test)]
 mod tests {

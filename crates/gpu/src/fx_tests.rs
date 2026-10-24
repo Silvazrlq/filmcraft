@@ -727,10 +727,17 @@ fn gpu_effects_match_cpu_exactly() {
 /// Per-channel relative tolerance for multipass routes (`|cpu - gpu| / (1 + |cpu|)`, as in [`compare`]).
 const MULTIPASS_TOLERANCE: f32 = EXACT;
 
-/// CPU oracle for each multipass route id. No route has one yet; each port adds its arm here.
+/// CPU oracle for each multipass route id: the same sample parameters as `multipass_effect_for`,
+/// through the CPU effect (`vfx::apply`), not through the plan.
 fn cpu_reference(id: &str, source: &filmcraft_render::Image) -> Option<filmcraft_render::Image> {
-    let _ = (id, source);
-    None
+    let e = match id {
+        "vr_blur" => effect("vr_blur", &[("blurriness", fl(4.0)), ("frame_layout", ch(0))]),
+        "vr_sharpen" => effect("vr_sharpen", &[("amount", fl(60.0)), ("frame_layout", ch(0))]),
+        "vr_denoise" => effect("vr_denoise", &[("amount", fl(50.0)), ("noise_type", ch(0)), ("show_noise", ParamValue::Bool(false)), ("frame_layout", ch(0))]),
+        _ => return None,
+    };
+    let mut out = source.clone();
+    filmcraft_render::vfx::apply(&mut out, &e, &cx(Tick::ZERO, 1.0)).then_some(out)
 }
 
 /// Every registered multipass route on the adapter against its CPU oracle, channel by channel.
@@ -746,7 +753,7 @@ fn multipass_routes_match_cpu_oracle_on_adapter() {
     let source = filmcraft_render::Image { w: w as usize, h: h as usize, px: px.clone() };
     let mut failures = Vec::new();
     for id in MULTIPASS_ROUTES {
-        let Some(route) = multipass_effect_for(id) else {
+        let Some(route) = multipass_effect_for(id, w, h) else {
             failures.push(format!("{id}: no MultipassEffect registered"));
             continue;
         };

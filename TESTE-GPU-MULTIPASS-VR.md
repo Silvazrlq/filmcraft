@@ -13,19 +13,26 @@ Status: **não medido**. Os três ids estão em `UNMEASURED_GPU_ROUTES` (`crates
 ```
 cargo test -p filmcraft-render --lib -- row_tests
 cargo test -p filmcraft-render --lib -- unmeasured_routes_are_never_in_the_gpu_allowlist
-cargo test -p filmcraft-gpu --lib -- vr_
+cargo test -p filmcraft-gpu --lib -- multipass_routes_match_cpu_oracle_on_adapter --nocapture
 ```
 
 - `row_tests::vr_plans_match_the_cpu_reference_for_every_layout`: executa cada plano com a semântica dos kernels na CPU e compara com a referência CPU por vista (layouts 0, 1, 2; tamanhos 16×8 e 9×7; blur, sharpen, denoise, denoise com show). Isso prova a montagem do plano e a matemática, não o shader.
 - `vr_wgsl_validates`: naga valida `vr.wgsl`. `vr_wgsl_exposes_every_plan_kernel`: os nomes batem com o plano.
 
+## Harness genérico (registrado)
+
+- `MULTIPASS_ROUTES` (`crates/render/src/gpufx_multipass.rs`): `vr_blur`, `vr_sharpen`, `vr_denoise`.
+- `multipass_effect_for(id, w, h)`: monta o plano no tamanho do frame, com parâmetros de amostra fixos (blur sigma 2.0; sharpen 0.6 / sigma 1.2; denoise sigma 0.9 / threshold 0.08). Os parâmetros ainda não vêm da instância do efeito.
+- Oráculo CPU (`cpu_reference` em `fx_tests.rs`): `vfx::apply` com os mesmos parâmetros de amostra, tolerância `EXACT`.
+- Os ids seguem em `UNMEASURED_GPU_ROUTES`. `measure_route` recusa qualquer id fora dessa lista.
+
 ## Pendente antes de medir na AMD
 
-1. Caso de paridade GPU para cada id, pelo harness genérico que a thread da infra (`feat/gpu-multipass-route`) publica. Depois de ligar os ids a esse caminho, eles saem de `UNMEASURED_GPU_ROUTES` só após medição.
-2. Medição na AMD:
+1. Medição na AMD:
 
 ```
 CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test -p filmcraft-gpu --lib -- --nocapture vr_
 ```
 
-`fx_tests::gpu_vr_effects_report_pixel_deltas_against_independent_and_typed_cpu` (da infra) exige adaptador AMD. Sem AMD ele falha; isso não é paridade. Não conta como passou.
+`fx_tests::multipass_routes_match_cpu_oracle_on_adapter` e `fx_tests::gpu_vr_effects_report_pixel_deltas_against_independent_and_typed_cpu` exigem adaptador AMD. Sem AMD falham com `NotFound` (verificado neste container). Isso não é paridade e não conta como passou.
+2. Ligar os parâmetros reais da instância do efeito, e só então o caminho do efeito; até lá a medição vale só para os parâmetros de amostra.
