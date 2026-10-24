@@ -960,8 +960,11 @@ fn roughen_octave_probe_matches_cpu_on_adapter() {
     let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_octave_probe"], plan };
     let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("octave probe route");
     let mut first: Option<String> = None;
+    let mut table: Vec<String> = Vec::new();
     let mut check = |label: String, got: f32, want: f32| {
-        if first.is_none() && (got.is_nan() || (got - want).abs() > EXACT) {
+        let bad = got.is_nan() || (got - want).abs() > EXACT;
+        table.push(format!("{} {label}: gpu {got} cpu {want}", if bad { "DIFF" } else { "ok  " }));
+        if first.is_none() && bad {
             first = Some(format!("{label}: gpu {got} cpu {want}"));
         }
     };
@@ -999,6 +1002,7 @@ fn roughen_octave_probe_matches_cpu_on_adapter() {
         }
         check(format!("octave {k} corner001 mod12"), gpu[at(4)], (hz % 12) as f32);
     }
+    eprintln!("octave probe, all entries (GPU vs CPU):\n{}", table.join("\n"));
     eprintln!("octave probe: first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
     assert!(first.is_none(), "octave probe: first divergence {}", first.unwrap_or_default());
 }
