@@ -264,7 +264,8 @@ pub(crate) fn create_session(
         .into_iter()
         .find(|adapter| adapter.get_info().vendor == 0x1002 && render_node_id(adapter).ok() == Some(node))
         .ok_or_else(|| ExportError::Unsupported("the admitted AMD Vulkan render node is unavailable".into()))?;
-    let descriptor = wgpu::DeviceDescriptor::default();
+    // The adapter's own limits: `create_amd_interop_device` checks the request against them.
+    let descriptor = wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() };
     let (device, queue) = create_amd_interop_device(&adapter, &descriptor, node).map_err(ExportError::Unsupported)?;
     let renderer =
         ExportRenderer::from_required_device(instance, adapter, device.clone(), queue.clone()).map_err(|error| ExportError::Unsupported(error.to_string()))?;
@@ -533,6 +534,8 @@ impl H264ResidentSession {
         if output_layout.size > device.limits().max_buffer_size || output_layout.size > device.limits().max_storage_buffer_binding_size {
             return Err(ExportError::Unsupported("resident output buffer exceeds Vulkan device limits".into()));
         }
+        // the renderer's device is shared with the export renderer pool: error scopes go under its lock
+        let _device_scopes = filmcraft_gpu::device_scope::lock();
         let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let output = device.create_buffer(&wgpu::BufferDescriptor {

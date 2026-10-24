@@ -654,6 +654,8 @@ fn import_va_nv12_surface_with_allocation(
     let imported = imported.into_hal()?;
     let imported_desc =
         wgpu::BufferDescriptor { label: Some("va-decoded-nv12-dmabuf"), size: object_size, usage: wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false };
+    // the device is shared with the export renderer pool: its error scopes go under the process lock
+    let _device_scopes = filmcraft_gpu::device_scope::lock();
     let imported_oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let imported_validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     // SAFETY: imported HAL buffer belongs to this device; descriptor matches its bounded allocation.

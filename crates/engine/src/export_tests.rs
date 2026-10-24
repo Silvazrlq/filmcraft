@@ -613,6 +613,14 @@ fn hardware_export_is_explicit_and_legacy_auto_is_gpu_required() {
     assert!(e.contains("off | auto"), "{e}");
     let old: filmcraft_export::ExportSettings = serde_json::from_value(json!({"format": "h264"})).unwrap();
     assert_eq!((old.hardware_encoding, old.gpu_rendering), off);
+    // NVIDIA-only mode: NVENC with CPU rendering, never rewritten to AMD, and it refuses conflicts
+    let nvenc = (HardwareEncoding::NvencRequired, GpuRendering::Off);
+    assert_eq!(setting(json!({"path": "x.mp4", "hardwareEncoding": "nvencRequired"})).unwrap(), nvenc);
+    assert_eq!(setting(json!({"path": "x.mp4", "settings": {"hardwareEncoding": "nvencRequired"}})).unwrap(), nvenc);
+    let e = setting(json!({"path": "x.mp4", "hardwareEncoding": "nvencRequired", "hardwareExport": false})).unwrap_err().to_string();
+    assert!(e.contains("does not combine with hardwareExport"), "{e}");
+    let e = setting(json!({"path": "x.mp4", "hardwareEncoding": "nvencRequired", "gpuRendering": "amdRequired"})).unwrap_err().to_string();
+    assert!(e.contains("gpuRendering off"), "{e}");
 }
 
 #[test]

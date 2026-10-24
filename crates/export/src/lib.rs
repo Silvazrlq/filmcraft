@@ -2298,8 +2298,10 @@ pub(crate) fn h264_slices(height: u32) -> usize {
 }
 
 fn h264_factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<Result<Box<dyn VideoEncoder>>> {
-    // GPU-required modes never get the software encoder: no hardware factory means an error, not CPU.
-    if format != Format::H264 || matches!(s.hardware_encoding, HardwareEncoding::AmdRequired | HardwareEncoding::GpuRequired) {
+    // GPU-required and hardware-required modes never get the software encoder: no hardware factory
+    // means an error, not CPU.
+    if format != Format::H264 || matches!(s.hardware_encoding, HardwareEncoding::AmdRequired | HardwareEncoding::GpuRequired | HardwareEncoding::NvencRequired)
+    {
         return None;
     }
     let mut cfg = filmcraft_h264enc::EncoderConfig::new(w, h, rate.num as u32, rate.den as u32);

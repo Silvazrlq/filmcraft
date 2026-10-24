@@ -23,8 +23,8 @@
 use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use filmcraft_engine::export::presets::{DEFAULT_PRESET, preset_key};
 use filmcraft_engine::export::{
-    AudioCodec, BitrateMode, ExportSettings, ExrCompression, FieldOrder, Format, GpuRendering, H264Profile, Multiplexer, MxfVideoCodec, Placement,
-    SampleFormat, Scaling, TextOverlay, builtin_presets, format_bytes,
+    AudioCodec, BitrateMode, ExportSettings, ExrCompression, FieldOrder, Format, GpuRendering, H264Profile, HardwareEncoding, Multiplexer, MxfVideoCodec,
+    Placement, SampleFormat, Scaling, TextOverlay, builtin_presets, format_bytes,
 };
 use filmcraft_engine::time::{FrameRate, Tick};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,9 @@ pub struct ExportUi {
     pub settings: ExportSettings,
     /// Export on the CPU (manual). Unchecked, the export uses the GPU where the format has a route.
     pub cpu_export: bool,
+    /// On the GPU route, encode with NVIDIA NVENC instead of AMD VA-API. Ignored while `cpu_export`
+    /// is on. Missing from older files, it reads as false (AMD).
+    pub nvenc_export: bool,
     /// File name without extension, and the folder.
     pub file_name: String,
     pub location: String,
@@ -70,6 +73,7 @@ impl Default for ExportUi {
             preset: DEFAULT_PRESET.into(),
             settings: preset,
             cpu_export: false,
+            nvenc_export: false,
             file_name: String::new(),
             location: String::new(),
             range: "entire".into(),
@@ -97,6 +101,12 @@ pub struct PresetManager {
 
 pub const CUSTOM: &str = "Custom";
 
+/// The encoder choices of the Encoder selector (the labels are the combo's values; CPU is the
+/// existing manual-CPU label).
+const ENCODER_AMD: &str = "AMD (VA-API)";
+const ENCODER_NVENC: &str = "NVIDIA (NVENC)";
+const ENCODER_CPU: &str = "Export via CPU (manual)";
+
 /// Collected automation ids (registered after drawing, so widgets can borrow the app freely).
 #[derive(Default)]
 struct Reg(Vec<(String, Rect, String)>);
@@ -122,9 +132,17 @@ fn gpu_capable(s: &ExportSettings) -> bool {
 }
 
 /// The settings an export runs with: the GPU unless the CPU is picked by hand or the format has no GPU route.
+/// The GPU route is AMD VA-API (`set_hardware_export(true)`), or NVIDIA NVENC when picked: CPU reference
+/// rendering with `HardwareEncoding::NvencRequired`, which fails closed rather than falling back.
 pub fn effective_settings(ex: &ExportUi) -> ExportSettings {
     let mut s = ex.settings.clone();
-    s.set_hardware_export(!ex.cpu_export && gpu_capable(&s));
+    let gpu = !ex.cpu_export && gpu_capable(&s);
+    if gpu && ex.nvenc_export {
+        s.set_hardware_export(false);
+        s.hardware_encoding = HardwareEncoding::NvencRequired;
+    } else {
+        s.set_hardware_export(gpu);
+    }
     s
 }
 
@@ -587,7 +605,7 @@ fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.add_space(8.0);
         let s = &mut ex.settings;
         if s.has_video() && section(ui, &mut reg, &mut ex.open_sections, "video", tl!("Video"), &t) {
-            video_section(ui, &mut reg, s, &mut ex.cpu_export, &t, seq_w, seq_h, seq_hdr);
+            video_section(ui, &mut reg, s, &mut ex.cpu_export, &mut ex.nvenc_export, &t, seq_w, seq_h, seq_hdr);
         }
         if (s.has_audio()
             || !s.has_video()
@@ -679,7 +697,17 @@ fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     reg.flush(app);
 }
 
-fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, cpu: &mut bool, t: &Tokens, seq_w: u32, seq_h: u32, seq_hdr: bool) {
+fn video_section(
+    ui: &mut egui::Ui,
+    reg: &mut Reg,
+    s: &mut ExportSettings,
+    cpu: &mut bool,
+    nvenc: &mut bool,
+    t: &Tokens,
+    seq_w: u32,
+    seq_h: u32,
+    seq_hdr: bool,
+) {
     // frame size
     let mut match_size = s.frame_size.is_none();
     row(ui, t, tl!("Frame Size"), |ui| {
@@ -881,24 +909,39 @@ fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, cpu: 
         }
         _ => {}
     }
-    row(ui, t, "", |ui| {
-        // a format without a GPU route (not H.264 or H.265) exports on the CPU whatever the checkbox says
+    row(ui, t, tl!("Encoder"), |ui| {
+        // a format without a GPU route (not H.264 or H.265) exports on the CPU whatever the choice says
         let gpu = gpu_capable(s);
-        let mut on = *cpu || !gpu;
-        let label = tl!("Export via CPU (manual)");
-        let r = ui.add_enabled(gpu, egui::Checkbox::new(&mut on, label));
-        reg.add("export.video.cpuExport", r.rect, label);
-        let changed = r.changed();
-        let hover = if gpu {
-            tl!("Off: GPU export (AMD GPU + same-node VA-API required; fails if unavailable). On: CPU reference renderer.")
+        let current = if !gpu || *cpu {
+            ENCODER_CPU
+        } else if *nvenc {
+            ENCODER_NVENC
         } else {
-            tl!("This format exports only via CPU")
+            ENCODER_AMD
         };
-        r.on_hover_text(hover);
-        if changed && gpu {
-            *cpu = on;
+        let labels = [(ENCODER_AMD.to_string(), true), (ENCODER_NVENC.to_string(), true), (ENCODER_CPU.to_string(), true)];
+        let mut chosen = None;
+        ui.add_enabled_ui(gpu, |ui| {
+            chosen = combo(ui, reg, "export.video.encoder", current, &labels, 220.0);
+        });
+        match chosen {
+            Some(0) => {
+                *cpu = false;
+                *nvenc = false;
+            }
+            Some(1) => {
+                *cpu = false;
+                *nvenc = true;
+            }
+            Some(2) => *cpu = true,
+            _ => {}
         }
     });
+    // NVENC H.265 is Windows-only; elsewhere it has no route
+    if gpu_capable(s) && !*cpu && *nvenc && s.format == Format::Hevc && !cfg!(target_os = "windows") {
+        // NVENC has no H.265 route on this platform: say so, and keep the choice (never switch silently)
+        row(ui, t, "", |ui| ui.label(egui::RichText::new(tl!("Not supported by FilmCraft's encoders yet")).color(t.danger).size(12.0)));
+    }
     row(ui, t, "", |ui| check(ui, reg, "export.video.maxDepth", &mut s.render_at_max_depth, tl!("Render at Maximum Depth")));
     row(ui, t, "", |ui| check(ui, reg, "export.video.maxQuality", &mut s.max_render_quality, tl!("Use Maximum Render Quality")));
 }

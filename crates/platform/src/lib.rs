@@ -483,6 +483,25 @@ mod amd_admission_tests {
             }
         }
     }
+
+    #[test]
+    fn amd_admission_size_follows_the_driver_declared_maximum() {
+        let s =
+            ExportSettings { format: Format::H264, h264_profile: H264Profile::High, bitrate_mode: BitrateMode::Cbr, bitrate_kbps: 8000, ..Default::default() };
+        let mut r = s.resolve(640, 360, filmcraft_time::FrameRate::FPS_24, 48000);
+        let mut a = admission(Format::H264, vaapi::ffi::VAProfileH264High);
+        // A driver that declares 8K takes 4K and 8K pictures.
+        a.caps.max_size = Some((7680, 4320));
+        r.width = 3840;
+        r.height = 2160;
+        assert!(a.validate_settings(&s, &r).is_ok(), "4K is taken when the driver declares 8K");
+        r.width = 7680;
+        r.height = 4320;
+        assert!(a.validate_settings(&s, &r).is_ok(), "8K is taken when the driver declares 8K");
+        // A driver that declares less refuses with an error, not a policy limit.
+        a.caps.max_size = Some((1920, 1088));
+        assert!(a.validate_settings(&s, &r).is_err(), "driver declares 1920x1088");
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

@@ -360,6 +360,8 @@ fn validate_buffer_on_device(device: &Device, source: &wgpu::Buffer, size: u64) 
     if size < 4 || !size.is_multiple_of(4) || size > source.size() {
         return Err("NV12 validation copy size is invalid".into());
     }
+    // the device is shared with the export renderer pool: its error scopes go under the process lock
+    let _device_scopes = filmcraft_gpu::device_scope::lock();
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let validation = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("filmcraft-interop-source-validation"),

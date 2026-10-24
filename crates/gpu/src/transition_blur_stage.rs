@@ -281,7 +281,9 @@ impl TransitionBlurStage {
         let p = op.progress;
         // Allocation failures (scratch textures, bind groups) are captured here and returned as an error:
         // no CPU fallback, and no panic through the device's default uncaptured-error handler.
+        let _device_scopes = crate::device_scope::lock();
         let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let _device_scopes = crate::device_scope::lock();
         let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("transition-blur") });
         let final_view = match op.kind {
