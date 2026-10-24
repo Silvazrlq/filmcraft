@@ -313,6 +313,13 @@ mod linux {
     use super::va::Session;
     use super::{DrmNodeId, ffi, h264, hevc};
     use crate::biplanar::Geometry;
+    use crate::vulkan_import::MAX_IN_FLIGHT_TRANSFERS;
+
+    /// Surfaces for a DPB of `dpb_frames`: the DPB, the picture being decoded, one spare, and one
+    /// more per transfer lease that can be in flight (a leased surface is never reused).
+    pub(crate) fn pool_size(dpb_frames: usize) -> usize {
+        dpb_frames.saturating_add(2).saturating_add(MAX_IN_FLIGHT_TRANSFERS).min(18 + MAX_IN_FLIGHT_TRANSFERS)
+    }
 
     /// The VA-API profiles that decode an H.264 stream of `profile_idc`, best fit first (a Main or
     /// High decoder also decodes what the smaller profiles allow).
@@ -406,8 +413,7 @@ mod linux {
                     let sps = filmcraft_h264::params::Sps::parse(&rbsp).map_err(|e| e.to_string())?;
                     sps.check_supported().map_err(|e| e.to_string())?;
                     let mbs = (sps.pic_width_in_mbs, sps.frame_height_in_mbs());
-                    // the DPB, the picture being decoded, and one spare
-                    let count = sps.max_dpb_frames().saturating_add(2).min(18);
+                    let count = pool_size(sps.max_dpb_frames());
                     let session = match node {
                         Some(node) => Session::new_linear_diagnostic(node, profiles, (sps.width(), sps.height()), count, geometry)?,
                         None => Session::new(profiles, (sps.width(), sps.height()), count, geometry)?,
@@ -424,7 +430,7 @@ mod linux {
                     if sps.range_extension {
                         return Err("HEVC range extensions are not taken".into());
                     }
-                    let count = (sps.max_dec_pic_buffering as usize).saturating_add(2).min(18);
+                    let count = pool_size(sps.max_dec_pic_buffering as usize);
                     let size = (sps.width, sps.height);
                     let session = match node {
                         Some(node) => Session::new_linear_diagnostic(node, profiles, size, count, geometry)?,
@@ -536,6 +542,20 @@ mod linux {
 
         fn is_disposable(&self, sample: &[u8]) -> bool {
             self.info.is_disposable(sample)
+        }
+    }
+
+    #[cfg(test)]
+    mod pool_tests {
+        use super::*;
+
+        #[test]
+        fn three_leases_leave_dpb_and_current_picture_surfaces_free() {
+            // DPB of one: its reference and the picture being decoded must stay free
+            // while all MAX_IN_FLIGHT_TRANSFERS transfers still hold a surface.
+            let free = pool_size(1) - MAX_IN_FLIGHT_TRANSFERS;
+            assert!(free >= 2, "pool {} leaves {free} free surfaces with 3 leases", pool_size(1));
+            assert_eq!(pool_size(usize::MAX), 18 + MAX_IN_FLIGHT_TRANSFERS);
         }
     }
 }
