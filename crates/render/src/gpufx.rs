@@ -595,7 +595,7 @@ pub const GPU_EFFECTS: &[&str] = &[
 /// is refused by [`evaluate_gpu_effect`] (absent from [`GPU_EFFECTS`]) until its parity case passes.
 /// `posterize_time` and `compound_blur` need a frame of another instant or a track image, so they
 /// stay here as design-only entries; see TESTE-GPU-MULTIPASS.md.
-pub const UNMEASURED_GPU_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "spacer", "compound_blur", "posterize_time"];
+pub const UNMEASURED_GPU_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "roughen_edges", "spacer", "compound_blur", "posterize_time"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EffectGpuFailure {
