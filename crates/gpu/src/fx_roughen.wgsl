@@ -282,6 +282,12 @@ fn cs_roughen_octave_probe(@builtin(global_invocation_id) id: vec3<u32>) {
             grad3(hash_u64(u64_of_i32(0), u64_of_i32(0), u64_of_i32(zc + 1), s), 0.0, 0.0, zf - 1.0),
             grad3(hash_u64(u64_of_i32(0), u64_of_i32(1), u64_of_i32(zc), s), 0.0, -1.0, zf),
             grad3(hash_u64(u64_of_i32(1), u64_of_i32(0), u64_of_i32(zc), s), -1.0, 0.0, zf));
+    } else if (texel.y == 3) {
+        let hh = hash_u64(u64_of_i32(0), u64_of_i32(0), u64_of_i32(zc + 1), s);
+        v = vec4<f32>(f32(hh.hi & 0xffffu), f32(hh.hi >> 16u), f32(hh.lo & 0xffffu), f32(hh.lo >> 16u));
+    } else if (texel.y == 4) {
+        let hh = hash_u64(u64_of_i32(0), u64_of_i32(0), u64_of_i32(zc + 1), s);
+        v = vec4<f32>(f32(mod12(hh)), 0.0, 0.0, 0.0);
     } else {
         v = vec4<f32>(
             grad3(hash_u64(u64_of_i32(1), u64_of_i32(1), u64_of_i32(zc), s), -1.0, -1.0, zf),

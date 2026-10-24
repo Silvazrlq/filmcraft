@@ -408,4 +408,13 @@ mod kernel_semantics_tests {
             assert!(worst < 1e-4, "sigma {sigma}: depth differs by {worst}");
         }
     }
+
+    /// The corner 001 of the origin cell at octave 0 (z = -1 after the offset): the CPU gradient is
+    /// -1 because the cell hash has mod 12 = 4 (x + z). A GPU that returns +1 has a different hash or index.
+    #[test]
+    fn corner_001_gradient_sign_at_origin() {
+        let h = hash_cell_reference(0, 0, 1, 0);
+        assert_eq!(h % 12, 4);
+        assert_eq!(grad_reference(h, 0.0, 0.0, -1.0), -1.0);
+    }
 }

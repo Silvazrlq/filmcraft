@@ -991,6 +991,13 @@ fn roughen_octave_probe_matches_cpu_on_adapter() {
         for (c, want) in r2.iter().enumerate() {
             check(format!("octave {k} corner row2[{c}]"), gpu[at(2) + c], *want);
         }
+        // corner 001 hash in 16-bit parts (row 3) and its mod 12 (row 4)
+        let hz = hash_cell_reference(0, 0, zc + 1, seed);
+        let want_parts = [(hz >> 32) as u32 & 0xffff, (hz >> 48) as u32, hz as u32 & 0xffff, (hz >> 16) as u32 & 0xffff];
+        for (c, want) in want_parts.iter().enumerate() {
+            check(format!("octave {k} corner001 hash part {c}"), gpu[at(3) + c], *want as f32);
+        }
+        check(format!("octave {k} corner001 mod12"), gpu[at(4)], (hz % 12) as f32);
     }
     eprintln!("octave probe: first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
     assert!(first.is_none(), "octave probe: first divergence {}", first.unwrap_or_default());
