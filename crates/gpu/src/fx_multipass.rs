@@ -161,6 +161,12 @@ impl MultipassRunner {
             return Err(MultipassGpuError::SizeMismatch);
         }
         plan.intermediate_bytes(size.0, size.1).map_err(MultipassGpuError::Plan)?;
+        // Every kernel is checked before `record` allocates any slot texture.
+        for pass in &plan.passes {
+            if !self.kernels.iter().any(|(name, _)| *name == pass.kernel) {
+                return Err(MultipassGpuError::UnknownKernel(pass.kernel));
+            }
+        }
         // Scopes are popped on every path, so a failure never leaves the device's scope stack open.
         let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
