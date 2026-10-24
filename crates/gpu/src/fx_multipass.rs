@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn refuses_a_bad_plan_before_recording_any_pass() {
-        let Some((device, _)) = adapter_device() else {
+        let Some((device, _queue)) = adapter_device() else {
             eprintln!("no GPU adapter; skipping");
             return;
         };
