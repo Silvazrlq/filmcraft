@@ -161,12 +161,7 @@ impl MultipassRunner {
             return Err(MultipassGpuError::SizeMismatch);
         }
         plan.intermediate_bytes(size.0, size.1).map_err(MultipassGpuError::Plan)?;
-        // Every kernel is checked before `record` allocates any slot texture.
-        for pass in &plan.passes {
-            if !self.kernels.iter().any(|(name, _)| *name == pass.kernel) {
-                return Err(MultipassGpuError::UnknownKernel(pass.kernel));
-            }
-        }
+        check_kernels(|name| self.kernels.iter().any(|(n, _)| *n == name), plan)?;
         // Scopes are popped on every path, so a failure never leaves the device's scope stack open.
         let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -243,6 +238,14 @@ impl MultipassRunner {
             .and_then(Option::as_ref)
             .map(|s| &s.view)
             .ok_or(MultipassGpuError::Plan(MultipassError::ReadBeforeWrite { pass: 0, slot: slot.0 }))
+    }
+}
+
+/// Refuses a plan naming a kernel that is not built, before any slot texture is allocated.
+fn check_kernels(known: impl Fn(&str) -> bool, plan: &MultipassPlan) -> Result<(), MultipassGpuError> {
+    match plan.passes.iter().find(|pass| !known(pass.kernel)) {
+        Some(pass) => Err(MultipassGpuError::UnknownKernel(pass.kernel)),
+        None => Ok(()),
     }
 }
 
@@ -399,6 +402,16 @@ mod tests {
         wgpu::naga::valid::Validator::new(Default::default(), Default::default()).validate(&module).expect("fx_multipass.wgsl must validate");
         let entries: Vec<&str> = module.entry_points.iter().map(|e| e.name.as_str()).collect();
         assert!(entries.contains(&"cs_copy") && entries.contains(&"cs_mix"), "{entries:?}");
+    }
+
+    #[test]
+    fn unknown_kernel_is_refused_without_a_device() {
+        let plan = MultipassPlan {
+            passes: vec![filmcraft_render::gpufx_multipass::Pass { kernel: "nope", inputs: vec![Slot(0)], output: Slot(1), params: vec![] }],
+            result: Slot(1),
+        };
+        assert_eq!(check_kernels(|name| name == "cs_copy", &plan), Err(MultipassGpuError::UnknownKernel("nope")));
+        assert_eq!(check_kernels(|name| name == "nope", &plan), Ok(()));
     }
 
     #[test]
