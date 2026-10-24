@@ -235,6 +235,19 @@ pub fn multipass_effect_for(id: &str, width: u32, height: u32) -> Option<Multipa
 /// every id here until the GPU parity is measured.
 pub const MULTIPASS_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "roughen_edges", "spacer"];
 
+/// The first `pass_count` passes of `plan`, with `slot` as the result. Measurement only: it lets the
+/// harness read an intermediate slot after a chosen pass. Validated like any plan, so a slot that
+/// the prefix never writes, or a count outside `1..=plan.passes.len()`, is refused.
+pub fn prefix_plan(plan: &MultipassPlan, pass_count: usize, slot: Slot) -> Result<MultipassPlan, MultipassError> {
+    if pass_count == 0 {
+        return Err(MultipassError::EmptyPlan);
+    }
+    let passes = plan.passes.get(..pass_count).ok_or(MultipassError::TooManyPasses { passes: pass_count })?;
+    let prefix = MultipassPlan { passes: passes.to_vec(), result: slot };
+    prefix.validate()?;
+    Ok(prefix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,6 +321,25 @@ mod tests {
         assert_eq!(with(MAX_PARAM_BYTES), Ok(1));
         assert_eq!(with(20), Err(MultipassError::BadParams { pass: 0, len: 20 }));
         assert_eq!(with(MAX_PARAM_BYTES + 16), Err(MultipassError::BadParams { pass: 0, len: MAX_PARAM_BYTES + 16 }));
+    }
+
+    #[test]
+    fn prefix_plan_reads_an_intermediate_after_chosen_pass() {
+        let p = plan(vec![pass("blur_h", &[0], 1), pass("blur_v", &[1], 2), pass("mix", &[0, 2], 1)], 1);
+        assert_eq!(prefix_plan(&p, 1, Slot(1)).map(|q| q.passes.len()), Ok(1));
+        assert_eq!(prefix_plan(&p, 2, Slot(2)).map(|q| q.result), Ok(Slot(2)));
+        assert_eq!(prefix_plan(&p, 3, Slot(1)).map(|q| q.passes.len()), Ok(3));
+    }
+
+    #[test]
+    fn prefix_plan_refuses_bad_indices_and_unwritten_slots() {
+        let p = plan(vec![pass("blur_h", &[0], 1), pass("blur_v", &[1], 2)], 1);
+        assert_eq!(prefix_plan(&p, 0, Slot(1)), Err(MultipassError::EmptyPlan));
+        assert_eq!(prefix_plan(&p, 3, Slot(1)), Err(MultipassError::TooManyPasses { passes: 3 }));
+        // slot 2 is written by pass 1 only, so a prefix of one pass never writes it
+        assert_eq!(prefix_plan(&p, 1, Slot(2)), Err(MultipassError::ResultNotWritten { slot: 2 }));
+        assert_eq!(prefix_plan(&p, 2, Slot(9)), Err(MultipassError::SlotOutOfRange { slot: 9 }));
+        assert_eq!(prefix_plan(&p, 2, Slot(0)), Err(MultipassError::ResultNotWritten { slot: 0 }));
     }
 
     #[test]

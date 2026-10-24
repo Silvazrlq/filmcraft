@@ -795,6 +795,24 @@ fn multipass_routes_match_cpu_oracle_on_adapter() {
     assert!(failures.is_empty(), "multipass GPU routes differ from the CPU oracle:\n{}", failures.join("\n"));
 }
 
+/// Diagnostic for a diverging route: runs each prefix of the roughen_edges plan on the adapter and prints
+/// the checksum of its result slot. Ignored by default; run it on the AMD with `--ignored --nocapture`.
+/// It prints GPU values only; comparing a stage against the CPU needs a CPU replica per pass.
+#[test]
+#[ignore = "AMD diagnostic: prints per-stage GPU checksums for roughen_edges"]
+fn roughen_edges_stage_checksums_on_adapter() {
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let route = filmcraft_render::gpufx_multipass::multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    for stage in 1..=route.plan.passes.len() {
+        let slot = route.plan.passes.get(stage - 1).map(|p| p.output).expect("stage is in range");
+        let values = super::fx_multipass::measure_route_until(&dev, &q, &route, &px, (w, h), stage, slot).expect("stage measurement");
+        let sum: f64 = values.iter().map(|&v| f64::from(v)).sum();
+        eprintln!("roughen_edges stage {stage} slot {}: sum {sum:.6}, texels {}", slot.0, values.len());
+    }
+}
+
 /// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {
