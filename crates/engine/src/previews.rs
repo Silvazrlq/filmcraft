@@ -611,11 +611,31 @@ struct Todo {
     len: i64,
 }
 
+/// Check the status-bar render backend (`timeline.renderBackend`) before any work starts.
+///
+/// `cpu` is the reference route. `gpu` fails closed: the export pipeline has no GPU route for
+/// previews yet (Auto is refused and AMD-only resident export needs admission that previews do not
+/// request), so nothing is rendered and no frame silently falls back to the CPU.
+pub fn check_render_backend(backend: &str) -> Result<()> {
+    match backend {
+        "cpu" => Ok(()),
+        "gpu" => Err(EngineError::Other(
+            "GPU render for previews is not available yet: nothing was rendered and no frame fell back to the CPU. Switch the status bar to CPU to render."
+                .into(),
+        )),
+        other => Err(EngineError::Other(format!("unknown render backend `{other}` (expected cpu or gpu)"))),
+    }
+}
+
 /// Start rendering previews as a background job. `{"wait": true}` renders synchronously.
 ///
 /// The In/Out modes render only the frames between In and Out (a segment that extends past them
 /// gets a partial preview), and every mode renders only frames that have no preview yet.
 pub fn render(s: &mut Session, mode: RenderMode, p: &Value) -> Result<Value> {
+    // The status-bar backend is for Enter (effects and transitions) only.
+    if mode == RenderMode::EffectsInToOut {
+        check_render_backend(&s.prefs.timeline.render_backend)?;
+    }
     let (seq, range) = in_out(s)?;
     let rate = s.project.sequence(seq).ok_or(EngineError::NoSequence)?.settings.frame_rate;
     let store = s.previews.clone();
@@ -907,4 +927,44 @@ pub fn bar_json(s: &Session) -> Result<Value> {
             "hash": g.hash,
         })).collect::<Vec<_>>(),
     }))
+}
+
+#[cfg(test)]
+mod render_backend_tests {
+    use super::check_render_backend;
+
+    #[test]
+    fn cpu_is_the_reference_route() {
+        assert!(check_render_backend("cpu").is_ok());
+    }
+
+    #[test]
+    fn gpu_fails_closed_with_a_reason() {
+        let err = check_render_backend("gpu").err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.contains("not available"), "{err}");
+        assert!(err.contains("nothing was rendered"), "{err}");
+    }
+
+    #[test]
+    fn enter_render_refuses_gpu_before_any_job_starts() {
+        let mut s = crate::Session::default();
+        s.prefs.timeline.render_backend = "gpu".into();
+        assert!(super::render(&mut s, super::RenderMode::EffectsInToOut, &serde_json::json!({})).is_err());
+        assert!(s.jobs.is_empty());
+    }
+
+    #[test]
+    fn other_render_commands_ignore_the_enter_backend() {
+        let mut s = crate::Session::default();
+        s.prefs.timeline.render_backend = "gpu".into();
+        // no sequence: fails for that reason, not because of the Enter backend
+        let err = super::render(&mut s, super::RenderMode::InToOut, &serde_json::json!({})).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(!err.contains("GPU render"), "{err}");
+    }
+
+    #[test]
+    fn unknown_backend_is_an_error_not_a_default() {
+        assert!(check_render_backend("metal").is_err());
+        assert!(check_render_backend("").is_err());
+    }
 }

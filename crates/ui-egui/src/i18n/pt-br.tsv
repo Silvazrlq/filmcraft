@@ -3603,3 +3603,7 @@
 	Whisper large-v3 (GPU + vocal isolation)	Whisper large-v3 (GPU + isolamento vocal)
 	Whisper large-v3 Q5_0 (multilingual, 1.08 GB)	Whisper large-v3 Q5_0 (multilíngue, 1,08 GB)
 	Whisper large-v3 Turbo (multilingual, 809 M, faster)	Whisper large-v3 Turbo (multilíngue, 809 M, mais rápido)
+	Enter renders: CPU	Enter renderiza: CPU
+	Enter renders: GPU	Enter renderiza: GPU
+	Choose whether Enter renders effects and transitions on the CPU or the GPU. The GPU route is not available yet and fails without rendering.	Escolha se o Enter renderiza efeitos e transições na CPU ou na GPU. A rota GPU ainda não está disponível e falha sem renderizar.
+	Saving preferences failed	Não foi possível salvar as preferências
