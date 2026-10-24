@@ -358,6 +358,8 @@ pub enum FxOp {
     Spatial(SpatialOp),
     Procedural(ProceduralOp),
     Filter(FilterOp),
+    /// A routed multi-pass effect (see `gpufx_multipass::MultipassOp`); built by the planner only.
+    Multipass(crate::gpufx_multipass::MultipassOp),
     Stylize(StylizeOp),
     LegacyWipe(LegacyWipeOp),
     Invert {
@@ -1210,6 +1212,7 @@ impl FxOp {
             FxOp::Spatial(op) => op.gpu_ok(),
             FxOp::Procedural(op) => op.gpu_ok(),
             FxOp::Filter(op) => op.gpu_ok(),
+            FxOp::Multipass(_) => true,
             FxOp::Stylize(op) => op.gpu_ok(),
             FxOp::LegacyWipe(op) => op.gpu_ok(),
             FxOp::Invert { blend, .. } => blend.is_finite(),
@@ -1435,6 +1438,7 @@ impl FxOp {
             FxOp::Spatial(op) => op.apply(img),
             FxOp::Procedural(op) => op.apply(img),
             FxOp::Filter(op) => op.apply(img),
+            FxOp::Multipass(op) => op.apply(img),
             FxOp::Stylize(op) => op.apply(img),
             FxOp::LegacyWipe(op) => op.apply(img),
             FxOp::LogoCutout { background, threshold, softness, unmultiply, invert } => {

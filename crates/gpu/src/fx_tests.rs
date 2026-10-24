@@ -1859,7 +1859,7 @@ fn gpu_effect_layers_match_cpu_plan() {
             ],
         };
         let cpu = execute_cpu(&plan).over_black_rgba8();
-        c.composite(&plan);
+        c.composite(&plan).expect("composite");
         let (_, _, gpu) = c.read_output().expect("readback");
         let keep = interior(&plan);
         let (p99, mean, max) = stats8(&cpu, &gpu, &keep);
@@ -1878,7 +1878,7 @@ fn plain_layers_skip_the_effect_stage() {
     };
     let mut c = GpuCompositor::new(&dev, &q);
     let plan = FramePlan::Layers { width: 64, height: 36, layers: vec![PlanLayer::new(yuv_frame(64, 36), Affine::IDENTITY, 1.0, Blend::Normal)] };
-    c.composite(&plan);
+    c.composite(&plan).expect("composite");
     assert!(c.fx.as_ref().is_some_and(fx::FxStage::is_idle));
     let fx = LayerFx { size: (64, 36), decimation: 1, ops: vec![FxOp::BlackWhite] };
     let with = FramePlan::Layers {
@@ -1886,10 +1886,10 @@ fn plain_layers_skip_the_effect_stage() {
         height: 36,
         layers: vec![PlanLayer { fx: Some(Arc::new(fx)), ..PlanLayer::new(yuv_frame(64, 36), Affine::IDENTITY, 1.0, Blend::Normal) }],
     };
-    c.composite(&with);
+    c.composite(&with).expect("composite");
     assert!(!c.fx.as_ref().is_some_and(fx::FxStage::is_idle));
     // and they are released once no layer needs them
-    c.composite(&plan);
+    c.composite(&plan).expect("composite");
     assert!(c.fx.as_ref().is_some_and(fx::FxStage::is_idle));
 }
 
@@ -1927,7 +1927,7 @@ fn layers_with_effects_fall_back_to_the_cpu_without_a_stage() {
         if !stage {
             c.fx = None;
         }
-        c.composite(&plan);
+        c.composite(&plan).expect("composite");
         let (_, _, gpu) = c.read_output().expect("readback");
         let (p99, mean, _) = stats8(&cpu, &gpu, &interior(&plan));
         eprintln!("effect stage {stage}: interior p99 {p99}, mean {mean:.3}");
@@ -2004,4 +2004,57 @@ fn effect_source_integer_decimation_preserves_cpu_box_oracle() {
             assert!(worst <= EXACT && flips == 0.0, "{w}x{h} n{n} source box: {worst}, {flips}");
         }
     }
+}
+
+/// Each routed op, run through the effect stage, against its CPU reference (`vfx::apply` with the
+/// same instance and context). Skips without an adapter. Uses the production builder directly: the
+/// planner's allowlist (`ROUTED_ON_GPU`) is not consulted, so this measures a route before it is listed.
+#[test]
+fn routed_ops_match_their_cpu_reference_on_adapter() {
+    let Some((dev, q)) = device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut c = GpuCompositor::new(&dev, &q);
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let frame = VideoFrame::rgba_f32(w, h, px.clone());
+    let source = filmcraft_render::Image { w: w as usize, h: h as usize, px: px.clone() };
+    let vr = |id: &str, params: &[(&str, ParamValue)]| (effect(id, params), cx(Tick::ZERO, 1.0));
+    let cases = [
+        ("vr_blur", vr("vr_blur", &[("blurriness", fl(4.0)), ("frame_layout", ch(0))])),
+        ("vr_sharpen", vr("vr_sharpen", &[("amount", fl(60.0)), ("frame_layout", ch(0))])),
+        ("vr_denoise", vr("vr_denoise", &[("amount", fl(50.0)), ("noise_type", ch(0)), ("show_noise", ParamValue::Bool(false)), ("frame_layout", ch(0))])),
+        ("spacer", (filmcraft_render::gpufx_multipass::multipass_case("spacer").expect("spacer"), filmcraft_render::gpufx_multipass::multipass_cx())),
+        (
+            "roughen_edges",
+            (filmcraft_render::gpufx_multipass::multipass_case("roughen_edges").expect("roughen"), filmcraft_render::gpufx_multipass::multipass_cx()),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (id, (e, cx)) in cases {
+        let Some(op) = filmcraft_render::gpufx_multipass::multipass_op(&e, &cx, w, h) else {
+            failures.push(format!("{id}: no routed op"));
+            continue;
+        };
+        let mut expected = source.clone();
+        if !filmcraft_render::vfx::apply(&mut expected, &e, &cx) {
+            failures.push(format!("{id}: no CPU reference"));
+            continue;
+        }
+        let (ow, oh, gpu) = match c.effect_image(&frame, &LayerFx { size: (w, h), decimation: 1, ops: vec![FxOp::Multipass(op)] }) {
+            Some(out) => out,
+            None => {
+                failures.push(format!("{id}: effect stage refused the routed op"));
+                continue;
+            }
+        };
+        assert_eq!((ow, oh, gpu.len()), (w, h, px.len()), "{id}: size");
+        let (worst, flips) = compare(&expected.px, &gpu);
+        eprintln!("{id}: worst {worst:.2e}, flips {flips}");
+        if worst.is_nan() || worst > MULTIPASS_TOLERANCE || flips != 0.0 {
+            failures.push(format!("{id}: worst {worst:.2e}, flips {flips}"));
+        }
+    }
+    assert!(failures.is_empty(), "routed ops differ from the CPU reference:\n{}", failures.join("\n"));
 }

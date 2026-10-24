@@ -14,6 +14,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::fx_multipass::MultipassRunner;
+
 use filmcraft_render::gpufx::FxOp;
 use filmcraft_render::plan::LayerFx;
 
@@ -72,6 +74,8 @@ pub(crate) struct FxStage {
     source: wgpu::RenderPipeline,
     pool: HashMap<(u32, u32), Vec<Target>>,
     used: HashSet<(u32, u32)>,
+    /// One runner per routed effect: its pipelines, and the slots it reuses across layers.
+    multipass: HashMap<&'static str, MultipassRunner>,
 }
 
 /// One compute pass of a job.
@@ -79,6 +83,8 @@ struct Dispatch {
     run: bool,
     bg: wgpu::BindGroup,
     groups: (u32, u32),
+    /// A routed pass's own pipeline (`run` is ignored then).
+    own: Option<wgpu::ComputePipeline>,
 }
 
 /// The recorded work of one layer's effects (bind groups made; recorded into the frame's encoder
@@ -136,6 +142,8 @@ fn steps(op: &FxOp) -> Vec<Step> {
             out.push(step(OP_TINT, [0; 4], &[black[0], black[1], black[2], *amount, white[0], white[1], white[2]]));
         }
         FxOp::BlackWhite => out.push(step(OP_BLACK_WHITE, [0; 4], &[])),
+        // routed ops run through `FxStage::job`'s multi-pass branch, never as steps
+        FxOp::Multipass(_) => {}
         FxOp::ColorBalance { sh, md, hi, preserve } => {
             out.push(step(OP_COLOR_BALANCE, [*preserve as u32, 0, 0, 0], &[sh[0], sh[1], sh[2], 0.0, md[0], md[1], md[2], 0.0, hi[0], hi[1], hi[2]]))
         }
@@ -436,7 +444,7 @@ impl FxStage {
             multiview_mask: None,
             cache: None,
         });
-        Self { px: compute("fx_px"), run: compute("fx_run"), bgl, source, pool: HashMap::new(), used: HashSet::new() }
+        Self { px: compute("fx_px"), run: compute("fx_run"), bgl, source, pool: HashMap::new(), used: HashSet::new(), multipass: HashMap::new() }
     }
 
     /// Start a frame: pooled textures of sizes no layer uses by [`end_frame`](Self::end_frame)
@@ -496,6 +504,21 @@ impl FxStage {
         if w > max || h > max {
             return None;
         }
+        if let Some(route) = fx.ops.iter().find_map(|op| if let FxOp::Multipass(m) = op { Some(m) } else { None }) {
+            // a routed effect is the whole chain (the planner guarantees it): its passes read the
+            // source draw and write the runner's result slot, which the layer draws right after
+            if fx.ops.len() != 1 {
+                return None;
+            }
+            let source_target = self.targets(device, (w, h), 1).first()?.1.clone();
+            let runner = match self.multipass.entry(route.route.id) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(v) => v.insert(MultipassRunner::new(device, route.route.wgsl, route.route.kernels).ok()?),
+            };
+            let prepared = runner.prepare(device, &route.route.plan, &source_target, (w, h)).ok()?;
+            let dispatches = prepared.passes.into_iter().map(|p| Dispatch { run: false, bg: p.bind, groups: p.groups, own: Some(p.pipeline) }).collect();
+            return Some(FxJob { source_bg, source_target, dispatches, result: prepared.result, result_texture: prepared.result_texture });
+        }
         let all: Vec<Step> = fx.ops.iter().flat_map(steps).collect();
         let n = if all.iter().any(|s| s.combine) { 3 } else { 2 };
         let targets = self.targets(device, (w, h), n);
@@ -545,7 +568,7 @@ impl FxStage {
             } else {
                 (w.div_ceil(16), h.div_ceil(16))
             };
-            dispatches.push(Dispatch { run: s.run, bg, groups });
+            dispatches.push(Dispatch { run: s.run, bg, groups, own: None });
             cur = dst;
             if s.combine {
                 orig = None;
@@ -585,7 +608,11 @@ impl FxStage {
         }
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fx"), timestamp_writes: None });
         for d in &job.dispatches {
-            pass.set_pipeline(if d.run { &self.run } else { &self.px });
+            pass.set_pipeline(match &d.own {
+                Some(pipeline) => pipeline,
+                None if d.run => &self.run,
+                None => &self.px,
+            });
             pass.set_bind_group(0, &d.bg, &[]);
             pass.dispatch_workgroups(d.groups.0, d.groups.1, 1);
         }

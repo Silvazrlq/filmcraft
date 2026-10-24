@@ -903,6 +903,14 @@ pub struct LayerFx {
     pub ops: Vec<FxOp>,
 }
 
+impl LayerFx {
+    /// Whether the layer's effect is a routed multi-pass op. Such a layer must run on the GPU: it
+    /// has no CPU path in the compositor, so a stage that is missing or fails is an error.
+    pub fn is_routed(&self) -> bool {
+        self.ops.iter().any(|op| matches!(op, FxOp::Multipass(_)))
+    }
+}
+
 impl PlanLayer {
     /// A layer drawing `frame` directly.
     pub fn new(frame: Arc<VideoFrame>, matrix: Affine, opacity: f32, blend: Blend) -> Self {
@@ -1061,10 +1069,14 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
             continue;
         }
         let masked = e.masks.iter().any(|m| m.mode != filmcraft_project::MaskMode::None);
-        if masked || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+        if masked || !(crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) || crate::gpufx_multipass::is_routed(&e.effect)) {
             return None;
         }
         chain.push(e);
+    }
+    // a routed multi-pass effect replaces the whole chain: its plan has no slot for other ops
+    if chain.len() > 1 && chain.iter().any(|e| crate::gpufx_multipass::is_routed(&e.effect)) {
+        return None;
     }
     Some(chain)
 }
@@ -1339,7 +1351,17 @@ fn push_item(
                 frame_rate: seq.settings.frame_rate.as_f64(),
                 working: seq.settings.color.working,
             };
-            let ops: Option<Vec<FxOp>> = chain.iter().map(|e| FxOp::eval(e, &cx, lw, lh).filter(FxOp::gpu_ok)).collect();
+            let ops: Option<Vec<FxOp>> = chain
+                .iter()
+                .map(|e| {
+                    if crate::gpufx_multipass::is_routed(&e.effect) {
+                        let (w, h) = (u32::try_from(lw).ok()?, u32::try_from(lh).ok()?);
+                        crate::gpufx_multipass::multipass_op(e, &cx, w, h).map(FxOp::Multipass)
+                    } else {
+                        FxOp::eval(e, &cx, lw, lh).filter(FxOp::gpu_ok)
+                    }
+                })
+                .collect();
             if let Some(ops) = ops {
                 let m = Affine::scale(opts.scale as f64, opts.scale as f64)
                     .then_apply(&motion)
