@@ -2053,6 +2053,7 @@ dependencies = [
  "filmcraft-time",
  "image",
  "log",
+ "naga",
  "pollster 0.4.0",
  "rayon",
  "wgpu",

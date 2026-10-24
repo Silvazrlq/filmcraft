@@ -16,6 +16,8 @@ mod color;
 pub(crate) use color::cdl;
 mod distort;
 pub(crate) use distort::{Plane3d, Rotate3d, camera_shake_place, rotate_3d_plane, warp_plane, wiggle_place};
+#[cfg(test)]
+mod hash_emul;
 mod immersive;
 mod lights;
 pub(crate) use lights::{LensFlareParams, lens_flare_add, lens_flare_params};

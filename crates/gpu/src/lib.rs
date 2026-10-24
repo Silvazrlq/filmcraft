@@ -53,6 +53,7 @@ pub mod mask;
 pub mod nv12_repack;
 pub mod resident;
 mod timeline_transition;
+mod noise_u64;
 mod transition;
 mod transition_blur_stage;
 pub mod transition_catalog;
