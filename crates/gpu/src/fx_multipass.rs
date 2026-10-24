@@ -232,7 +232,7 @@ fn allocate(device: &wgpu::Device, size: (u32, u32)) -> Scratch {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
@@ -270,6 +270,9 @@ pub fn measure_route(
     let padded_row =
         unpadded_row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT).checked_mul(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT).ok_or(MultipassGpuError::SizeMismatch)?;
     let readback_len = u64::from(padded_row).checked_mul(u64::from(h)).ok_or(MultipassGpuError::SizeMismatch)?;
+    if readback_len > device.limits().max_buffer_size {
+        return Err(MultipassGpuError::SizeMismatch);
+    }
 
     let mut runner = MultipassRunner::new(device, effect.wgsl, effect.kernels)?;
     let extent = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };

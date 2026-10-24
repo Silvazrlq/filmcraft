@@ -773,7 +773,9 @@ fn multipass_routes_match_cpu_oracle_on_adapter() {
             if d.is_nan() || d > MULTIPASS_TOLERANCE {
                 bad += 1;
             }
-            worst = worst.max(d);
+            if !d.is_nan() {
+                worst = worst.max(d);
+            }
         }
         eprintln!("{id}: max rel diff {worst:.2e}, {bad} values over {MULTIPASS_TOLERANCE:.0e}");
         if bad > 0 {
