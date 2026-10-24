@@ -15,7 +15,7 @@ mod blur;
 mod color;
 pub(crate) use color::cdl;
 mod distort;
-pub(crate) use distort::{Plane3d, Rotate3d, camera_shake_place, rotate_3d_plane, warp_plane, wiggle_place};
+pub(crate) use distort::{Plane3d, Rotate3d, camera_shake_place, rotate_3d_plane, round_rect_sdf, warp_plane, wiggle_place};
 #[cfg(test)]
 mod hash_emul;
 mod immersive;

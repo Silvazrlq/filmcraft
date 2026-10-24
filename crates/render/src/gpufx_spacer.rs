@@ -16,6 +16,7 @@
 //! Nothing here panics; the kernel name and the plan are plain data validated by `gpufx_multipass`.
 
 use crate::gpufx_multipass::{MultipassPlan, Pass, Slot};
+use crate::vfx::round_rect_sdf;
 
 /// Entry point of the spacer kernel in `fx_spacer.wgsl`.
 pub const SPACER_KERNEL: &str = "cs_spacer";
@@ -166,16 +167,6 @@ fn bilinear<F: Fn(u32, u32) -> [f32; 4]>(src: &F, w: u32, h: u32, u: f32, v: f32
         out[k] = top + (bot - top) * ty;
     }
     out
-}
-
-/// Signed distance to a rounded rectangle (negative inside). Same formula as `vfx::distort`, whose
-/// copy is private to the `vfx` module.
-fn round_rect_sdf(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    let (hx, hy) = ((x1 - x0) / 2.0 - r, (y1 - y0) / 2.0 - r);
-    let (qx, qy) = ((px - cx).abs() - hx, (py - cy).abs() - hy);
-    let outside = qx.max(0.0).hypot(qy.max(0.0));
-    outside + qx.max(qy).min(0.0) - r
 }
 
 #[cfg(test)]

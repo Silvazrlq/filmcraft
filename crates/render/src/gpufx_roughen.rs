@@ -1,14 +1,13 @@
 //! Roughen Edges on the GPU: the parameter evaluation and the three-pass plan for `fx_roughen.wgsl`.
 //!
-//! The CPU reference is `roughen_edges` in `vfx/stylize.rs`. Its blur is three box passes per axis;
-//! the GPU kernel uses a truncated Gaussian of the same sigma (see the note in `fx_roughen.wgsl`), so
-//! the two agree closely but not bit for bit. Parameters arrive already evaluated (the caller reads
+//! The CPU reference is `roughen_edges` in `vfx/stylize.rs`. Its depth blur is three box passes per
+//! axis with the radii of `effects::gaussian_boxes`; the GPU runs the same boxes in the same order. Parameters arrive already evaluated (the caller reads
 //! them with the same helpers the CPU uses) and every value is checked here: nothing non-finite
 //! reaches the device, and nothing here panics.
 
-use crate::gpufx_multipass::{MultipassPlan, Pass, Slot};
+use crate::gpufx_multipass::{MAX_PARAM_BYTES, MultipassPlan, Pass, Slot};
 
-/// Bytes of the uniform block `RoughenUniform` in `fx_roughen.wgsl` (five `vec4`s).
+/// Bytes of the uniform block read by `cs_roughen_apply` in `fx_roughen.wgsl` (five `vec4`s).
 pub const UNIFORM_BYTES: usize = 80;
 
 /// Evaluated inputs, as the CPU reads them: `fv`/`chv`/`cv`/`offv` results of the effect instance.
@@ -101,7 +100,11 @@ pub fn roughen_params(input: &RoughenInput) -> Result<Option<RoughenParams>, &'s
     let scale_px = (input.scale / 100.0 * 30.0 * input.px_scale).max(0.5);
     let stretch = input.stretch.exp2();
     let evolution = input.evolution / 360.0;
-    if !(sigma.is_finite() && scale_px.is_finite() && stretch.is_finite() && stretch > 0.0 && evolution.is_finite()) {
+    let span = scale_px * stretch;
+    let inv_span = scale_px / stretch;
+    if !(sigma.is_finite() && scale_px.is_finite() && stretch.is_finite() && stretch > 0.0 && evolution.is_finite())
+        || !(span.is_finite() && inv_span.is_finite() && span >= f32::MIN_POSITIVE && inv_span >= f32::MIN_POSITIVE)
+    {
         return Err("roughen: derived parameter overflows");
     }
     let [r, g, b] = crate::vfx::lin(input.edge_color);
@@ -179,10 +182,16 @@ pub fn roughen_plan(params: &RoughenParams, width: u32, height: u32) -> Multipas
     let (rx, ry) = crate::effects::gaussian_boxes(width as usize, height as usize, params.sigma, params.sigma);
     let radius = |v: &[u32], i: usize| v.get(i).copied().unwrap_or(0);
     let box_block = |r: u32, alpha: u32, vertical: u32| {
-        let mut b = Vec::with_capacity(16);
+        // Zero-padded to the shader's declared binding size (array<vec4<u32>, 8>).
+        let mut b = Vec::with_capacity(MAX_PARAM_BYTES);
         for word in [r, alpha, vertical, 0] {
             b.extend_from_slice(&word.to_le_bytes());
         }
+        b.resize(MAX_PARAM_BYTES, 0);
+        b
+    };
+    let padded = |mut b: Vec<u8>| {
+        b.resize(MAX_PARAM_BYTES, 0);
         b
     };
     let mut passes = Vec::with_capacity(7);
@@ -196,7 +205,7 @@ pub fn roughen_plan(params: &RoughenParams, width: u32, height: u32) -> Multipas
         let input = if i == 0 { Slot(3) } else { Slot(i as u8) };
         passes.push(Pass { kernel: "cs_roughen_box", inputs: vec![input], output: Slot(i as u8 + 1), params: box_block(radius(&ry, i), 0, 1) });
     }
-    passes.push(Pass { kernel: "cs_roughen_apply", inputs: vec![Slot(0), Slot(3)], output: Slot(4), params: params.uniform_bytes().to_vec() });
+    passes.push(Pass { kernel: "cs_roughen_apply", inputs: vec![Slot(0), Slot(3)], output: Slot(4), params: padded(params.uniform_bytes().to_vec()) });
     MultipassPlan { passes, result: Slot(4) }
 }
 
@@ -230,8 +239,8 @@ mod tests {
         assert_eq!(plan.validate(), Ok(4));
         assert_eq!(plan.passes.len(), 7);
         assert_eq!(plan.passes.last().map(|p| p.inputs.clone()), Some(vec![Slot(0), Slot(3)]));
-        assert_eq!(plan.passes.last().map(|p| p.params.len()), Some(UNIFORM_BYTES));
-        assert!(plan.passes.iter().take(6).all(|p| p.params.len() == 16));
+        assert_eq!(plan.passes.last().map(|p| p.params[..UNIFORM_BYTES].len()), Some(UNIFORM_BYTES));
+        assert!(plan.passes.iter().all(|p| p.params.len() == MAX_PARAM_BYTES));
     }
 
     #[test]
