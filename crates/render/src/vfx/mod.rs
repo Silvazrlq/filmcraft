@@ -366,7 +366,7 @@ fn fade(t: f32) -> f32 {
     t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 #[inline]
-fn grad3(h: u64, x: f32, y: f32, z: f32) -> f32 {
+pub(crate) fn grad3(h: u64, x: f32, y: f32, z: f32) -> f32 {
     // 12 edge directions of a cube (Perlin 2002)
     match h % 12 {
         0 => x + y,

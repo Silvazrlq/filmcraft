@@ -257,3 +257,37 @@ fn cs_roughen_hash_probe(@builtin(global_invocation_id) id: vec3<u32>) {
     let h = hash_u64(u64_of_i32(texel.x), u64_of_i32(texel.y), u64_of_i32(0), U64(pword(13u), pword(12u)));
     textureStore(output, texel, vec4<f32>(f32(h.hi & 0xffffu), f32(h.hi >> 16u), f32(h.lo & 0xffffu), f32(h.lo >> 16u)));
 }
+
+// Measurement probe (not a route): octave k of the fbm at (0, 0), column x = k. Row 0: noise3 value.
+// Row 1: grad3 of corners 000, 001, 010, 100. Row 2: corners 110, 101, 011, 111. Same bindings as the apply.
+@compute @workgroup_size(8, 8, 1)
+fn cs_roughen_octave_probe(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(output);
+    if (id.x >= size.x || id.y >= size.y) {
+        return;
+    }
+    let texel = vec2<i32>(id.xy);
+    let k = u32(texel.x);
+    let s = add64(U64(pword(13u), pword(12u)), U64(0u, k));
+    let z = f32(k) * 17.13;
+    let zi = floor(z);
+    let zf = z - zi;
+    let zc = i32(zi);
+    var v = vec4<f32>(0.0);
+    if (texel.y == 0) {
+        v = vec4<f32>(noise3(0.0, 0.0, z, s), 0.0, 0.0, 0.0);
+    } else if (texel.y == 1) {
+        v = vec4<f32>(
+            grad3(hash_u64(u64_of_i32(0), u64_of_i32(0), u64_of_i32(zc), s), 0.0, 0.0, zf),
+            grad3(hash_u64(u64_of_i32(0), u64_of_i32(0), u64_of_i32(zc + 1), s), 0.0, 0.0, zf - 1.0),
+            grad3(hash_u64(u64_of_i32(0), u64_of_i32(1), u64_of_i32(zc), s), 0.0, -1.0, zf),
+            grad3(hash_u64(u64_of_i32(1), u64_of_i32(0), u64_of_i32(zc), s), -1.0, 0.0, zf));
+    } else {
+        v = vec4<f32>(
+            grad3(hash_u64(u64_of_i32(1), u64_of_i32(1), u64_of_i32(zc), s), -1.0, -1.0, zf),
+            grad3(hash_u64(u64_of_i32(1), u64_of_i32(0), u64_of_i32(zc + 1), s), -1.0, 0.0, zf - 1.0),
+            grad3(hash_u64(u64_of_i32(0), u64_of_i32(1), u64_of_i32(zc + 1), s), 0.0, -1.0, zf - 1.0),
+            grad3(hash_u64(u64_of_i32(1), u64_of_i32(1), u64_of_i32(zc + 1), s), -1.0, -1.0, zf - 1.0));
+    }
+    textureStore(output, texel, v);
+}

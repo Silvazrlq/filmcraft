@@ -940,6 +940,62 @@ fn roughen_hash_probe_matches_cpu_on_adapter() {
     assert!(first.is_none(), "cell hash: first divergence {}", first.unwrap_or_default());
 }
 
+/// Octave probe at (0, 0): noise3 of octaves 0..3 (row 0) and the grad3 values of their corners (rows 1 and 2)
+/// against the CPU. The first mismatching entry is printed; a sign error shows as an equal magnitude.
+#[test]
+fn roughen_octave_probe_matches_cpu_on_adapter() {
+    use filmcraft_render::gpufx_multipass::{MultipassEffect, multipass_case, multipass_cx};
+    use filmcraft_render::gpufx_roughen::{grad_reference, hash_cell_reference, noise_reference, roughen_input, roughen_params};
+    let (dev, q) = required_gpu_device();
+    let (w, h) = (67u32, 41u32);
+    let px = picture(w, h);
+    let base = multipass_effect_for("roughen_edges", w, h).expect("roughen_edges has a route");
+    let e = multipass_case("roughen_edges").expect("roughen_edges case");
+    let params = roughen_params(&roughen_input(&e, &multipass_cx())).ok().flatten().expect("roughen_edges has an effect");
+    let mut plan = base.plan.clone();
+    let last = plan.passes.len() - 1;
+    if let Some(p) = plan.passes.get_mut(last) {
+        p.kernel = "cs_roughen_octave_probe";
+    }
+    let probe = MultipassEffect { id: base.id, wgsl: base.wgsl, kernels: &["cs_roughen_box", "cs_roughen_octave_probe"], plan };
+    let gpu = measure_route(&dev, &q, &probe, &px, (w, h)).expect("octave probe route");
+    let mut first: Option<String> = None;
+    let mut check = |label: String, got: f32, want: f32| {
+        if first.is_none() && (got.is_nan() || (got - want).abs() > EXACT) {
+            first = Some(format!("{label}: gpu {got} cpu {want}"));
+        }
+    };
+    for k in 0..4usize {
+        let seed = params.seed.wrapping_add(k as u64);
+        let z = k as f32 * 17.13;
+        let zi = z.floor();
+        let zf = z - zi;
+        let zc = zi as i64;
+        let at = |row: usize| (row * w as usize + k) * 4;
+        check(format!("octave {k} noise3"), gpu[at(0)], noise_reference(0.0, 0.0, z, seed));
+        let r1 = [
+            grad_reference(hash_cell_reference(0, 0, zc, seed), 0.0, 0.0, zf),
+            grad_reference(hash_cell_reference(0, 0, zc + 1, seed), 0.0, 0.0, zf - 1.0),
+            grad_reference(hash_cell_reference(0, 1, zc, seed), 0.0, -1.0, zf),
+            grad_reference(hash_cell_reference(1, 0, zc, seed), -1.0, 0.0, zf),
+        ];
+        let r2 = [
+            grad_reference(hash_cell_reference(1, 1, zc, seed), -1.0, -1.0, zf),
+            grad_reference(hash_cell_reference(1, 0, zc + 1, seed), -1.0, 0.0, zf - 1.0),
+            grad_reference(hash_cell_reference(0, 1, zc + 1, seed), 0.0, -1.0, zf - 1.0),
+            grad_reference(hash_cell_reference(1, 1, zc + 1, seed), -1.0, -1.0, zf - 1.0),
+        ];
+        for (c, want) in r1.iter().enumerate() {
+            check(format!("octave {k} corner row1[{c}]"), gpu[at(1) + c], *want);
+        }
+        for (c, want) in r2.iter().enumerate() {
+            check(format!("octave {k} corner row2[{c}]"), gpu[at(2) + c], *want);
+        }
+    }
+    eprintln!("octave probe: first divergent {}", first.clone().unwrap_or_else(|| "none".into()));
+    assert!(first.is_none(), "octave probe: first divergence {}", first.unwrap_or_default());
+}
+
 /// Every multipass route must be one the GPU route list has not measured yet, and never a measured GPU effect.
 #[test]
 fn multipass_harness_refuses_ids_outside_unmeasured_list() {

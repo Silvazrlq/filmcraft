@@ -336,6 +336,16 @@ mod tests {
     }
 }
 
+/// CPU noise3 and grad3 for the octave probe.
+pub fn noise_reference(x: f32, y: f32, z: f32, seed: u64) -> f32 {
+    crate::vfx::noise3(x, y, z, seed)
+}
+
+/// CPU grad3 of a cell hash for the octave probe.
+pub fn grad_reference(h: u64, x: f32, y: f32, z: f32) -> f32 {
+    crate::vfx::grad3(h, x, y, z)
+}
+
 /// CPU `hash_u` of cell (x, y, z) with `seed`, for the hash probe.
 pub fn hash_cell_reference(x: i64, y: i64, z: i64, seed: u64) -> u64 {
     crate::vfx::hash_u(x, y, z, seed)
