@@ -124,8 +124,8 @@ pub(crate) fn row_radius(sigma: f32, w: usize, h: usize, y: usize) -> usize {
     if s <= 0.3 {
         return 0;
     }
-    let r = ((((12.0 * s * s / 3.0 + 1.0).sqrt() - 1.0) / 2.0 + 0.5).floor().max(1.0) as isize).min((w as isize - 1) / 2).max(0);
-    r as usize
+    let r = ((((12.0 * s * s / 3.0 + 1.0).sqrt() - 1.0) / 2.0 + 0.5).floor().max(1.0) as isize).min((w as isize - 1) / 2);
+    r.max(0) as usize
 }
 
 /// Three box passes of radius `r` along one row (`w` RGBA pixels) with wrap-around. Sliding
@@ -162,6 +162,9 @@ pub(crate) fn blur_row_wrap(row: &mut [f32], w: usize, r: usize) {
 /// Three-pass box approximation of a Gaussian along each row with wrap-around (see [`row_radius`]).
 fn blur_rows_wrap(img: &mut Image, sigma: f32) {
     let (w, h) = (img.w, img.h);
+    if w == 0 {
+        return;
+    }
     img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| blur_row_wrap(row, w, row_radius(sigma, w, h, y)));
 }
 
@@ -445,5 +448,40 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             });
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod row_tests {
+    use super::*;
+
+    #[test]
+    fn row_radius_is_zero_for_small_sigma_and_bounded_by_the_row() {
+        assert_eq!(row_radius(0.2, 64, 32, 16), 0);
+        assert_eq!(row_radius(0.0, 0, 0, 0), 0);
+        for y in 0..32 {
+            assert!(row_radius(1e6, 9, 32, y) <= 4);
+        }
+    }
+
+    #[test]
+    fn blur_row_wrap_keeps_a_constant_row_and_wraps_the_seam() {
+        let (w, r) = (8, 2);
+        let mut flat = vec![0.5f32; w * 4];
+        blur_row_wrap(&mut flat, w, r);
+        assert!(flat.iter().all(|v| (v - 0.5).abs() < 1e-6));
+
+        // a single bright pixel at x = 0 spreads onto x = w-1 across the seam
+        let mut row = vec![0.0f32; w * 4];
+        row[0..4].copy_from_slice(&[1.0; 4]);
+        blur_row_wrap(&mut row, w, r);
+        assert!(row[(w - 1) * 4] > 0.0 && row[1 * 4] > 0.0);
+    }
+
+    #[test]
+    fn zero_width_image_is_a_no_op() {
+        let mut img = Image { w: 0, h: 4, px: Vec::new() };
+        blur_rows_wrap(&mut img, 5.0);
+        assert!(img.px.is_empty());
     }
 }

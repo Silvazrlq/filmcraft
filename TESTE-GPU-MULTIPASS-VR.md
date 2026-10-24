@@ -6,12 +6,13 @@ Status: **não medido**. Os três ids estão em `UNMEASURED_GPU_ROUTES` (`crates
 
 ```
 cargo test -p filmcraft-gpu --lib -- vr_wgsl_validates
-cargo test -p filmcraft-render --lib -- vr_
+cargo test -p filmcraft-render --lib -- row_tests vr_
 cargo test -p filmcraft-render --lib -- unmeasured_routes_are_never_in_the_gpu_allowlist
 ```
 
 - `vr_wgsl_validates`: `crates/gpu/src/vr.wgsl` faz parse e validação com naga. Não prova que o kernel calcula o mesmo que a CPU.
-- `vr_*` (render): paridade dos oráculos CPU de VR, incluindo `row_radius` / `blur_row_wrap` refatorados.
+- `row_radius`, `blur_row_wrap` e `blur_rows_wrap` (render, `vfx::immersive::row_tests`): testes próprios, não cobertos pelo filtro `vr_`.
+- `vr_*` (render): oráculos CPU de VR (chromatic, color gradients, projeção, esfera) e rotação. Não exercitam o caminho de blur refatorado.
 - `unmeasured_routes_are_never_in_the_gpu_allowlist`: os três ids não são elegíveis.
 
 ## Pendente antes de medir na AMD

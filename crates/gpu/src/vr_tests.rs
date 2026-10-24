@@ -1,5 +1,5 @@
 //! The immersive-video WGSL kernels (`vr.wgsl`) parse and validate. Parity with the CPU math is
-//! checked elsewhere.
+//! is not checked here: see `TESTE-GPU-MULTIPASS-VR.md`.
 
 #[test]
 fn vr_wgsl_validates() {

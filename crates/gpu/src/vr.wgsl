@@ -130,7 +130,8 @@ fn vr_denoise_combine(@builtin(global_invocation_id) gid: vec3<u32>) {
     let q = textureLoad(blurred, c, 0);
     // weight falls off with the largest colour difference (RGB only)
     let d = max(max(abs(p.r - q.r), abs(p.g - q.g)), abs(p.b - q.b));
-    let thr = comb_p.threshold;
+    // the CPU keeps thr >= 0.02; the floor only stops a zero threshold from giving 0/0
+    let thr = max(comb_p.threshold, 1e-6);
     let k = exp(-(d * d) / (thr * thr));
     let o = p + (q - p) * k;
     if comb_p.show == 1u {
