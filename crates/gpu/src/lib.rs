@@ -46,6 +46,8 @@ mod blur_transition;
 pub mod demo_source;
 pub mod export_renderer;
 pub mod fx;
+#[cfg_attr(not(test), allow(dead_code, reason = "no effect routes use the runner yet"))]
+mod fx_multipass;
 pub mod lut;
 pub mod mask;
 pub mod nv12_repack;
