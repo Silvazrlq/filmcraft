@@ -49,9 +49,25 @@ pub enum MultipassGpuError {
 }
 
 struct Scratch {
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: (u32, u32),
+}
+
+/// One pass of a prepared plan: its pipeline, bind group and dispatch size.
+pub(crate) struct PreparedPass {
+    pub(crate) pipeline: wgpu::ComputePipeline,
+    pub(crate) bind: wgpu::BindGroup,
+    pub(crate) groups: (u32, u32),
+    pub(crate) label: &'static str,
+}
+
+/// A plan ready to record: its passes and the result slot (view and texture, for the layer draw
+/// and for readback).
+pub(crate) struct Prepared {
+    pub(crate) passes: Vec<PreparedPass>,
+    pub(crate) result: wgpu::TextureView,
+    pub(crate) result_texture: wgpu::Texture,
 }
 
 /// Compute pipelines for one kernel module plus the scratch slots they write.
@@ -140,17 +156,17 @@ impl MultipassRunner {
         Ok(Self { layout, kernels, slots: (0..MAX_SLOTS).map(|_| None).collect() })
     }
 
-    /// Records every pass of `plan` into `encoder` and returns the view of the result slot.
-    /// The caller submits the encoder. `source` must be an Rgba32Float view of `size`.
-    /// An `Err` can leave passes already recorded: the caller must discard that encoder, never submit it.
-    pub(crate) fn encode(
+    /// Validates `plan` at `size`, allocates its slots and builds every pass's pipeline and bind
+    /// group. Everything that can fail happens here, so recording the passes later cannot fail.
+    /// The passes read `source` (an Rgba32Float view of `size`) and the slots this runner owns, which
+    /// are reused by the next plan of the same size: record the passes before preparing another.
+    pub(crate) fn prepare(
         &mut self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
         plan: &MultipassPlan,
         source: &wgpu::TextureView,
         size: (u32, u32),
-    ) -> Result<wgpu::TextureView, MultipassGpuError> {
+    ) -> Result<Prepared, MultipassGpuError> {
         if size.0 == 0 || size.1 == 0 {
             return Err(MultipassGpuError::SizeMismatch);
         }
@@ -164,27 +180,20 @@ impl MultipassRunner {
         // Scopes are popped on every path, so a failure never leaves the device's scope stack open.
         let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let recorded = self.record(device, encoder, plan, source, size);
+        let recorded = self.build(device, plan, source, size);
         let validated = resolve(super::poll_now(validation.pop()));
         let allocated = match super::poll_now(oom.pop()) {
             Some(None) => Ok(()),
             Some(Some(_)) => Err(MultipassGpuError::OutOfMemory),
             None => Err(MultipassGpuError::ScopePending),
         };
-        let result = recorded?;
+        let prepared = recorded?;
         validated?;
         allocated?;
-        Ok(result)
+        Ok(prepared)
     }
 
-    fn record(
-        &mut self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        plan: &MultipassPlan,
-        source: &wgpu::TextureView,
-        size: (u32, u32),
-    ) -> Result<wgpu::TextureView, MultipassGpuError> {
+    fn build(&mut self, device: &wgpu::Device, plan: &MultipassPlan, source: &wgpu::TextureView, size: (u32, u32)) -> Result<Prepared, MultipassGpuError> {
         for pass in &plan.passes {
             let index = usize::from(pass.output.0);
             let fresh = !matches!(self.slots.get(index), Some(Some(s)) if s.size == size);
@@ -194,8 +203,10 @@ impl MultipassRunner {
             }
         }
         let groups = (size.0.div_ceil(WORKGROUP), size.1.div_ceil(WORKGROUP));
+        let mut passes = Vec::with_capacity(plan.passes.len());
         for pass in &plan.passes {
-            let pipeline = self.kernels.iter().find(|(name, _)| *name == pass.kernel).map(|(_, p)| p).ok_or(MultipassGpuError::UnknownKernel(pass.kernel))?;
+            let pipeline =
+                self.kernels.iter().find(|(name, _)| *name == pass.kernel).map(|(_, p)| p.clone()).ok_or(MultipassGpuError::UnknownKernel(pass.kernel))?;
             let input = |i: usize| -> Result<&wgpu::TextureView, MultipassGpuError> {
                 // A kernel that reads one input gets it on both bindings; validation guarantees at least one.
                 let slot = pass.inputs.get(i).or(pass.inputs.first()).copied().unwrap_or(Slot::SOURCE);
@@ -218,12 +229,40 @@ impl MultipassRunner {
                     wgpu::BindGroupEntry { binding: 3, resource: params.as_entire_binding() },
                 ],
             });
-            let mut pass_encoder = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(pass.kernel), timestamp_writes: None });
-            pass_encoder.set_pipeline(pipeline);
-            pass_encoder.set_bind_group(0, &bind, &[]);
-            pass_encoder.dispatch_workgroups(groups.0, groups.1, 1);
+            passes.push(PreparedPass { pipeline, bind, groups, label: pass.kernel });
         }
-        self.view(plan.result, source).cloned()
+        let result = self
+            .slots
+            .get(usize::from(plan.result.0))
+            .and_then(Option::as_ref)
+            .ok_or(MultipassGpuError::Plan(MultipassError::ResultNotWritten { slot: plan.result.0 }))?;
+        Ok(Prepared { passes, result: result.view.clone(), result_texture: result.texture.clone() })
+    }
+
+    /// Records the prepared passes into `encoder`, one compute pass each.
+    pub(crate) fn record(encoder: &mut wgpu::CommandEncoder, prepared: &Prepared) {
+        for pass in &prepared.passes {
+            let mut pass_encoder = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(pass.label), timestamp_writes: None });
+            pass_encoder.set_pipeline(&pass.pipeline);
+            pass_encoder.set_bind_group(0, &pass.bind, &[]);
+            pass_encoder.dispatch_workgroups(pass.groups.0, pass.groups.1, 1);
+        }
+    }
+
+    /// Records every pass of `plan` into `encoder` and returns the view of the result slot.
+    /// The caller submits the encoder. `source` must be an Rgba32Float view of `size`.
+    /// An `Err` means nothing was recorded.
+    pub(crate) fn encode(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        plan: &MultipassPlan,
+        source: &wgpu::TextureView,
+        size: (u32, u32),
+    ) -> Result<wgpu::TextureView, MultipassGpuError> {
+        let prepared = self.prepare(device, plan, source, size)?;
+        Self::record(encoder, &prepared);
+        Ok(prepared.result)
     }
 
     /// The view a slot currently holds. Validation guarantees a read follows a write; a missing
@@ -252,7 +291,7 @@ fn allocate(device: &wgpu::Device, size: (u32, u32)) -> Scratch {
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
-    Scratch { _texture: texture, view, size }
+    Scratch { texture, view, size }
 }
 
 /// Bounded wait for the measurement readback. `PollType::wait_indefinitely` can never return on some
@@ -346,7 +385,7 @@ pub fn measure_route(
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo { texture: &result._texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyTextureInfo { texture: &result.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo {
             buffer: &readback,
             layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row), rows_per_image: Some(h) },

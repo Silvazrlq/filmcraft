@@ -278,6 +278,54 @@ fn vr_route_for(e: &filmcraft_project::EffectInstance, cx: &crate::effects::FxCt
     Some(MultipassEffect { id, wgsl: VR_WGSL, kernels: VR_KERNELS, plan })
 }
 
+/// Routes the production planner may send to the GPU. Empty until each id's parity is measured on the
+/// AMD adapter; then the id moves here and out of `UNMEASURED_GPU_ROUTES`.
+pub const ROUTED_ON_GPU: &[&str] = &[];
+
+/// Whether the production planner may route `id` to the GPU multi-pass executor.
+pub fn is_routed(id: &str) -> bool {
+    ROUTED_ON_GPU.contains(&id)
+}
+
+/// A routed effect as a plan op: its GPU route, and as CPU reference the effect's own renderer
+/// (`vfx::apply`, the path the CPU render takes), with the evaluation context the render used.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MultipassOp {
+    pub route: MultipassEffect,
+    effect: filmcraft_project::EffectInstance,
+    t: filmcraft_time::Tick,
+    px_scale: f32,
+    seconds: f64,
+    frame_rate: f64,
+    working: filmcraft_color::WorkingSpace,
+}
+
+/// The op for `e` on a `width` x `height` working image, or None when its route does not apply to
+/// these parameters. The planner checks [`is_routed`] before it calls this.
+pub fn multipass_op(e: &filmcraft_project::EffectInstance, cx: &crate::effects::FxCtx, width: u32, height: u32) -> Option<MultipassOp> {
+    let route = multipass_route(e, cx, width, height)?;
+    Some(MultipassOp { route, effect: e.clone(), t: cx.t, px_scale: cx.px_scale, seconds: cx.seconds, frame_rate: cx.frame_rate, working: cx.working })
+}
+
+impl MultipassOp {
+    /// The CPU reference: the effect's CPU renderer on `img`, with the context the plan evaluated.
+    pub fn apply(&self, img: &mut crate::image::Image) {
+        let cx = crate::effects::FxCtx {
+            t: self.t,
+            px_scale: self.px_scale,
+            seconds: self.seconds,
+            timecode: "",
+            clip_name: "",
+            project: None,
+            env: None,
+            frame_rate: self.frame_rate,
+            working: self.working,
+        };
+        // vfx::apply handles every routed id; a false here would be a routing bug, so the image is left as is
+        let _ = crate::vfx::apply(img, &self.effect, &cx);
+    }
+}
+
 /// Routes that have a plan, kernel and CPU parity case. The classifier in gpufx.rs still refuses
 /// every id here until the GPU parity is measured.
 pub const MULTIPASS_ROUTES: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "roughen_edges", "spacer"];
