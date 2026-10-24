@@ -207,8 +207,9 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             }),
         );
         let mut session = Session::default();
-        if filmcraft_gpu::ExportRenderer::new_required().is_ok() {
-            session.previews.set_gpu_route(Some(std::sync::Arc::new(GpuPreviewRoute)));
+        match filmcraft_gpu::ExportRenderer::new_required() {
+            Ok(_) => session.previews.set_gpu_route(Some(std::sync::Arc::new(GpuPreviewRoute))),
+            Err(e) => log::error!("GPU preview route unavailable: {e}"),
         }
         #[cfg(target_os = "linux")]
         if amd_provider_enabled && let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {

@@ -86,8 +86,27 @@ fn device_failed() -> bool {
     DEVICE_FAILED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// Errors the strict device reports. `lost` is sticky: the device is gone. `frame` holds the
+/// validation or out-of-memory error of the frame being rendered; it is cleared when the next frame
+/// starts, so one bad pass refuses its own frame and nothing after it (a pipeline the driver
+/// rejected once is reported again by each pass that uses it).
 struct AmdDeviceAdmission {
-    failed: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    frame: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+/// Forget the previous frame's device error; a lost device stays refused.
+fn begin_frame(admission: &AmdDeviceAdmission) {
+    *admission.frame.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+/// The device's standing: `Err` once it is lost, or when the current frame has an error.
+fn admission_state(admission: &AmdDeviceAdmission) -> Result<(), String> {
+    let lock = |m: &std::sync::Mutex<Option<String>>| m.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    if let Some(detail) = lock(&admission.lost) {
+        return Err(detail);
+    }
+    lock(&admission.frame).map_or(Ok(()), Err)
 }
 
 fn strict_error(reason: EligibilityFailure) -> GpuPlanError {
@@ -177,20 +196,28 @@ impl ExportRenderer {
     /// Attach the host's admitted interop device so composition and VA transfers share one queue.
     pub fn from_required_device(instance: wgpu::Instance, adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue) -> Result<Self, GpuPlanError> {
         validate_required_adapter(&adapter.get_info())?;
-        let failed = std::sync::Arc::new(std::sync::Mutex::new(None));
-        let errors = failed.clone();
+        let lost = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let frame = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let errors = frame.clone();
         device.on_uncaptured_error(std::sync::Arc::new(move |error: wgpu::Error| {
+            log::error!("GPU required device error: {error}");
             *errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.to_string());
         }));
-        let errors = failed.clone();
+        let gone = lost.clone();
         device.set_device_lost_callback(move |reason, message| {
-            *errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!("device lost ({reason:?}): {message}"));
+            let detail = format!("device lost ({reason:?}): {message}");
+            log::error!("GPU required device {detail}");
+            *gone.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(detail);
         });
         let mut compositor = GpuCompositor::new(&device, &queue);
         compositor.strict_transition = Some(crate::transition_catalog::TransitionCatalogStage::new(&device, crate::ACCUM_FORMAT));
-        let renderer = Self { _instance: instance, adapter, device, queue, compositor, admission: Some(AmdDeviceAdmission { failed }) };
+        let renderer = Self { _instance: instance, adapter, device, queue, compositor, admission: Some(AmdDeviceAdmission { lost, frame }) };
         poll_required_device(&renderer.device, wgpu::PollType::Poll, "AMD pipeline creation")?;
-        renderer.check_required_admission()?;
+        // Only a lost device stops the constructor: pipeline errors are reported by the frame that uses them.
+        if let Some(detail) = renderer.admission.as_ref().and_then(|a| a.lost.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()) {
+            log::error!("AMD required device refused at start-up: {detail}");
+            return Err(strict_error(EligibilityFailure::RuntimeFailure { stage: "AMD device", detail }));
+        }
         Ok(renderer)
     }
 
@@ -200,10 +227,16 @@ impl ExportRenderer {
             .as_ref()
             .ok_or_else(|| strict_error(EligibilityFailure::UnsupportedDeviceRequirement { requirement: DeviceRequirement::StrictAdmission }))?;
         validate_required_adapter(&self.adapter.get_info())?;
-        if let Some(detail) = admission.failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
-            return Err(strict_error(EligibilityFailure::RuntimeFailure { stage: "AMD device", detail }));
+        admission_state(admission).map_err(|detail| {
+            log::error!("AMD required device refused a frame: {detail}");
+            strict_error(EligibilityFailure::RuntimeFailure { stage: "AMD device", detail })
+        })
+    }
+
+    fn begin_required_frame(&self) {
+        if let Some(admission) = &self.admission {
+            begin_frame(admission);
         }
-        Ok(())
     }
 
     /// Metadata preflight precedes every source-provider call. The resulting receipt remains
@@ -216,6 +249,7 @@ impl ExportRenderer {
         opts: RenderOptions,
         sources: &dyn SourceProvider,
     ) -> Result<RequiredFramePlan, GpuPlanError> {
+        self.begin_required_frame();
         let receipt = preflight_frame_required(project, seq, t, opts)?;
         self.check_required_admission()?;
         GpuCompositor::validate_required_routes(receipt.nodes())?;
@@ -701,6 +735,19 @@ mod tests {
         let gpu = R(r).render(&p, seq, Tick::ZERO, RenderOptions::default(), &m).expect("rendered");
         let cpu = filmcraft_render::render_sequence(&p, seq, Tick::ZERO, RenderOptions::default(), &m);
         assert_parity(&cpu, &gpu, "frame renderer");
+    }
+
+    /// A validation error from one frame refuses that frame only; a lost device stays refused.
+    #[test]
+    fn a_frame_error_does_not_poison_the_next_frame() {
+        let admission =
+            AmdDeviceAdmission { lost: Arc::new(std::sync::Mutex::new(None)), frame: Arc::new(std::sync::Mutex::new(Some("validation".to_string()))) };
+        assert!(admission_state(&admission).is_err());
+        begin_frame(&admission);
+        assert!(admission_state(&admission).is_ok());
+        *admission.lost.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some("device lost".to_string());
+        begin_frame(&admission);
+        assert!(admission_state(&admission).is_err());
     }
 
     #[test]
