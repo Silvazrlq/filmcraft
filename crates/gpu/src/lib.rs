@@ -163,6 +163,9 @@ pub const TRANSITION_AMD_PARITY: &[&str] = &[
     "tv_power",
     "vr_light_rays",
     "zoom_blur",
+    "center_split",
+    "split_legacy",
+    "band_slide",
 ];
 
 /// Effects with recorded CPU parity on the AMD adapter (22/10/2026, 0.10): every case of
