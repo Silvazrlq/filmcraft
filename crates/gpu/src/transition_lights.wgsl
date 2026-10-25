@@ -126,8 +126,8 @@ fn lights_apply(position: vec4<f32>) -> vec4<f32> {
         case 66u, 76u: {
             let zooms = params.kernel == 66u;
             var za = 1.0 + 0.1 * strength * pow(p, 3.0);
-            var zb = 1.0 + 0.1 * strength * (1.0 - pow(1.0 - p, 3.0));
-            if zooms { za = 1.0 + 3.0 * strength * pow(min(p * 2.0, 1.0), 3.0); zb = 1.0 + 3.0 * strength * (1.0 - pow(1.0 - clamp((p - 0.5) / 0.5, 0.0, 1.0), 3.0)); }
+            var zb = 1.0 + 0.1 * strength * pow(1.0 - p, 3.0);
+            if zooms { za = 1.0 + 3.0 * strength * pow(min(p * 2.0, 1.0), 3.0); zb = 1.0 + 3.0 * strength * pow(1.0 - clamp((p - 0.5) / 0.5, 0.0, 1.0), 3.0); }
             let blur = strength * env * 0.6; let taps = lights_taps(blur * max(sz.x, sz.y) * 0.5);
             var a = vec4(0.0); var b = vec4(0.0);
             if k < 1.0 { a = lights_zoom(0u, (xy.x - center.x) / za + center.x, (xy.y - center.y) / za + center.y, center.x, center.y, blur, taps); }

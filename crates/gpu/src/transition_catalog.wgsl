@@ -226,7 +226,8 @@ fn vr_light_rays(position: vec4<f32>) -> vec4<f32> {
     let cy = select(extent.y * 0.5, params.extra0.y, (flags & 2u) != 0u);
     let rx = rem_euclid(xy.x - cx + extent.x * 0.5, extent.x) - extent.x * 0.5;
     let ry = xy.y - cy;
-    let a = atan2(ry, rx);
+    // atan2(0, 0) is undefined in WGSL (AMD can return NaN at the centre pixel); CPU gives 0
+    let a = select(atan2(ry, rx), 0.0, rx == 0.0 && ry == 0.0);
     let r = length(vec2(rx, ry)) / extent.y;
     let rays = pow(0.5 + 0.5 * sin(a * 23.0 + p * 3.0) * cos(a * 7.0 - p * 2.0), 6.0);
     let fall = exp(-r * 1.5);
@@ -238,7 +239,7 @@ fn vr_light_rays(position: vec4<f32>) -> vec4<f32> {
 fn vr_mobius_sample(side: u32, xy: vec2<f32>, zoom: f32, twist: f32, extent: vec2<f32>, rmax: f32) -> vec4<f32> {
     let d = xy - extent * 0.5;
     let r = length(d);
-    let a = atan2(d.y, d.x) + twist * max(1.0 - r / rmax, 0.0);
+    let a = select(atan2(d.y, d.x), 0.0, r == 0.0) + twist * max(1.0 - r / rmax, 0.0);
     let r2 = r / zoom;
     return vr_sample_wrap(side, extent * 0.5 + r2 * vec2(cos(a), sin(a)), vec2<u32>(extent));
 }
@@ -380,7 +381,8 @@ fn field_wipe(at: vec4<f32>) -> vec4<f32> {
     let cy = params.extra0.w;
     var field = 0.0;
     if params.kernel == 20u {
-        let angle = atan2(-(at.y - cy), at.x - cx) - params.extra1.x * 0.017453292519943295;
+        // CPU clock_wipe is atan2(x - cx, -(y - cy)) (clockwise from top); centre pixel pinned to CPU's pi
+        let angle = select(atan2(at.x - cx, -(at.y - cy)), 3.141592653589793, at.x == cx && at.y == cy) - params.extra1.x * 0.017453292519943295;
         field = rem_euclid(angle, 6.283185307179586) / 6.283185307179586 * ((size.x + size.y) * 0.5);
     } else if params.kernel == 21u {
         var ox = 0.0;
@@ -585,7 +587,7 @@ fn dissolve_mosaic(position: vec4<f32>) -> vec4<f32> {
 }
 fn transition_shape_distance(shape: u32, x: f32, y: f32) -> f32 {
     let r = sqrt(x * x + y * y);
-    let theta = atan2(-y, x);
+    let theta = select(atan2(-y, x), 0.0, r == 0.0);
     if shape == 1u { return max(abs(x), abs(y)); }
     if shape == 2u { return (abs(x) + abs(y)) * 0.7071067811865476; }
     if shape == 3u { return star_distance(x, y, 5u, 0.45); }
@@ -626,8 +628,10 @@ fn shape_dissolve_field(position: vec4<f32>) -> f32 {
     return (transition_shape_distance(params.direction, u, v) + delay * 1.5) * size * 0.5;
 }
 fn shape_dissolve(position: vec4<f32>) -> vec4<f32> {
+    // CPU field_wipe margin includes the (hi - lo) * 0.01 term
+    let m = params.blur + 3.0 + (params.extra0.y - params.extra0.x) * 0.01;
     let d = shape_dissolve_field(position) -
-        (params.extra0.x - (params.blur + 3.0) + params.progress * (params.extra0.y - params.extra0.x + 2.0 * (params.blur + 3.0)));
+        (params.extra0.x - m + params.progress * (params.extra0.y - params.extra0.x + 2.0 * m));
     return wipe_pixel(pixel(0u, vec2<u32>(position.xy)), pixel(1u, vec2<u32>(position.xy)), d, params.blur, 0.0, 1.0);
 }
 fn shape_flow(position: vec4<f32>) -> vec4<f32> {

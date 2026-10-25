@@ -142,15 +142,9 @@ fn cs_cross_zoom_legacy(@builtin(global_invocation_id) id: vec3<u32>) {
     let p = params.f0.x;
     let z = 1.0 + 3.0 * select((1.0 - p) * 2.0, p * 2.0, p < 0.5);
     let center = vec2<f32>(size) * 0.5;
-    var sample_xy = center + (xy - center) / z;
-    var color: vec4<f32>;
-    if z >= 2.0 && all(size >= vec2(4u)) {
-        sample_xy = (xy - center) / (2.0 * z) + center * 0.5;
-        color = sample_down(input_a, sample_xy);
-    } else {
-        color = sample_linear(input_a, sample_xy);
-    }
-    textureStore(output_image, vec2<i32>(id.xy), color);
+    // Exact zoom sample like the CPU oracle; the CPU blur pass supplies the softening.
+    let sample_xy = center + (xy - center) / z;
+    textureStore(output_image, vec2<i32>(id.xy), sample_linear(input_a, sample_xy));
 }
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {

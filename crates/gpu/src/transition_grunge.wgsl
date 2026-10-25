@@ -147,7 +147,7 @@ fn grunge_apply(position: vec4<f32>) -> vec4<f32> {
             let white = grunge_smooth(0.2, 0.7, q); let r = xy - extent * 0.5;
             var c = vec4(0.0, 0.0, 0.0, 1.0);
             if abs(r.x) <= hx && abs(r.y) <= hy && hx > 0.0 {
-                let src = extent * 0.5 + vec2(r.x / max(sx, 1e-3), clamp(r.y / max(sy, 1e-3), 0.0, extent.y));
+                let src = vec2(extent.x * 0.5 + r.x / max(sx, 1e-3), clamp(extent.y * 0.5 + r.y / max(sy, 1e-3), 0.0, extent.y));
                 c = grunge_ab(src, 0.0);
                 let from_side = sample_clamped(side, src, textureDimensions(outgoing));
                 c = vec4(mix(from_side.rgb, glow.rgb, white), 1.0);
