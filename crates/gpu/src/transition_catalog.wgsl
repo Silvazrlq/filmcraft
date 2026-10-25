@@ -79,6 +79,24 @@ fn push(at: vec4<f32>) -> vec4<f32> {
     return sum / f32(count);
 }
 
+// CPU masks the source per pixel centre before the bilinear shift: taps whose centre is outside [lo, hi) add nothing.
+fn legacy_split_sample(side: u32, at: vec2<f32>, extent: vec2<i32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
+    let f = at - vec2(0.5);
+    let base = vec2<i32>(floor(f));
+    let k = f - vec2<f32>(base);
+    var sum = vec4(0.0);
+    for (var j = 0; j < 4; j++) {
+        let t = base + vec2(j & 1, j >> 1);
+        let c = vec2<f32>(t) + vec2(0.5);
+        if all(c >= lo) && all(c < hi) {
+            let wx = select(1.0 - k.x, k.x, (j & 1) == 1);
+            let wy = select(1.0 - k.y, k.y, (j >> 1) == 1);
+            sum += motion_raw_pixel(side, t, extent) * (wx * wy);
+        }
+    }
+    return sum;
+}
+
 fn legacy_center_split(xy: vec2<f32>, extent: vec2<f32>) -> vec4<f32> {
     let ei = vec2<i32>(extent);
     let p = params.progress;
@@ -88,11 +106,11 @@ fn legacy_center_split(xy: vec2<f32>, extent: vec2<f32>) -> vec4<f32> {
         let vert = select(-1.0, 1.0, (q & 2u) != 0u);
         let shift = vec2(side * extent.x * 0.5 * p, vert * extent.y * 0.5 * p);
         let src = xy - shift;
-        let inside = select((src.x < (extent.x * 0.5)), (src.x >= (extent.x * 0.5)), (q & 1u) != 0u)
-            && select((src.y < (extent.y * 0.5)), (src.y >= (extent.y * 0.5)), (q & 2u) != 0u);
-        if inside {
-            out = motion_over(motion_sample_raw(0u, src, ei), out);
-        }
+        let half_ext = extent * 0.5;
+        let right_bottom = vec2<bool>((q & 1u) != 0u, (q & 2u) != 0u);
+        let lo = select(vec2(-1e9), half_ext, right_bottom);
+        let hi = select(half_ext, vec2(1e9), right_bottom);
+        out = motion_over(legacy_split_sample(0u, src, ei, lo, hi), out);
     }
     return out;
 }
@@ -104,7 +122,7 @@ fn legacy_band_slide(xy: vec2<f32>, extent: vec2<f32>) -> vec4<f32> {
     for (var band = 0; band < 6; band++) {
         let sign = select(-1.0, 1.0, (band & 1) == 0);
         let src = xy - vec2(sign * shift, 0.0);
-        if src.x >= 0.0 && src.x < extent.x && src.y >= 0.0 && src.y < extent.y
+        if src.y >= 0.0 && src.y < extent.y
             && i32(floor(src.y / extent.y * 6.0)) == band {
             out = motion_over(motion_sample_raw(1u, src, ei), out);
         }
