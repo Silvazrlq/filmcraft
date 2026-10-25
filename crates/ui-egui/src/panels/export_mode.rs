@@ -1153,32 +1153,48 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
     let pic = crate::panels::monitor::fit(pv_area, r.width as f32, r.height as f32);
     ui.painter().rect_filled(pic, 0.0, Color32::BLACK);
     if app.ui.export.settings.has_video() {
-        if effective_settings(&app.ui.export).gpu_rendering == GpuRendering::Off {
-            let frame = rate.frame_at(app.session.playhead());
+        let frame = rate.frame_at(app.session.playhead());
+        let project = app.session.project.clone();
+        let mut notice: Option<String> = None;
+        let shown = if effective_settings(&app.ui.export).gpu_rendering == GpuRendering::Off {
             let key = FrameKey { target: Target::Sequence(seq_id), frame, size: 500, revision: app.session.revision, draft: false };
-            let project = app.session.project.clone();
             app.frames.request(key, rate.tick_of(frame), 0.5, &project, 0);
-            if let Some(img) = app.frames.get(&key) {
+            let img = app.frames.get(&key);
+            img.map(|img| {
                 let ctx = ui.ctx().clone();
-                let tex = app.texture_for(&ctx, "export-preview", key, &img);
-                let inner = match app.ui.export.settings.scaling {
-                    Scaling::StretchToFill => pic,
-                    Scaling::ScaleToFit => crate::panels::monitor::fit(pic, q.settings.width as f32, q.settings.height as f32),
-                    Scaling::ScaleToFill => {
-                        let s = (pic.width() / q.settings.width as f32).max(pic.height() / q.settings.height as f32);
-                        Rect::from_center_size(pic.center(), vec2(q.settings.width as f32 * s, q.settings.height as f32 * s))
-                    }
-                };
-                ui.painter().with_clip_rect(pic).image(tex, inner, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            }
+                app.texture_for(&ctx, "export-preview", key, &img)
+            })
         } else {
-            ui.painter().text(
-                pic.center(),
-                Align2::CENTER_CENTER,
-                tl!("Export preview unavailable in GPU-only mode; CPU fallback is disabled"),
-                Tokens::ui(12.0),
-                t.text_dim,
-            );
+            // same GPU route as the Program monitor: the sequence plan, presented by the GPU compositor
+            let key = FrameKey { target: Target::SequencePlan(seq_id), frame, size: 500, revision: app.session.revision, draft: false };
+            app.frames.request(key, rate.tick_of(frame), 0.5, &project, 0);
+            match app.frames.get_plan(&key) {
+                Some(plan) => {
+                    let old_status = app.ui.status.clone();
+                    let tex = app.gpu_present(key, &plan).map(|(id, _)| id);
+                    if tex.is_none() && app.ui.status != old_status {
+                        notice = Some(std::mem::replace(&mut app.ui.status, old_status));
+                    }
+                    tex
+                }
+                None => {
+                    notice = app.frames.plan_error(&key).or_else(|| app.gpu.is_none().then(|| tl!("GPU preview unavailable; CPU fallback is disabled").into()));
+                    None
+                }
+            }
+        };
+        if let Some(tex) = shown {
+            let inner = match app.ui.export.settings.scaling {
+                Scaling::StretchToFill => pic,
+                Scaling::ScaleToFit => crate::panels::monitor::fit(pic, q.settings.width as f32, q.settings.height as f32),
+                Scaling::ScaleToFill => {
+                    let s = (pic.width() / q.settings.width as f32).max(pic.height() / q.settings.height as f32);
+                    Rect::from_center_size(pic.center(), vec2(q.settings.width as f32 * s, q.settings.height as f32 * s))
+                }
+            };
+            ui.painter().with_clip_rect(pic).image(tex, inner, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        } else if let Some(notice) = notice {
+            ui.painter().text(pic.center(), Align2::CENTER_CENTER, notice, Tokens::ui(12.0), t.text_dim);
         }
     } else {
         ui.painter().text(pic.center(), Align2::CENTER_CENTER, tl!("Audio only"), Tokens::ui(13.0), t.text_dim);
