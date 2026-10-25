@@ -314,7 +314,7 @@ fn motion_apply(position: vec4<f32>) -> vec4<f32> {
                     got_b = true;
                 }
             }
-            if got_a { sum += motion_over(color_b, color_a); }
+            if got_a { sum += motion_over(color_a, color_b); }
             else { sum += color_b; }
         }
         return sum / f32(count);
