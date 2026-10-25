@@ -343,7 +343,9 @@ pub fn measure_route(
     if w == 0 || h == 0 {
         return Err(MultipassGpuError::SizeMismatch);
     }
-    if !filmcraft_render::gpufx::UNMEASURED_GPU_ROUTES.contains(&effect.id) {
+    // measurable: still unmeasured, or already routed after its AMD measurement (regression guard)
+    let measurable = filmcraft_render::gpufx::UNMEASURED_GPU_ROUTES.contains(&effect.id) || filmcraft_render::gpufx_multipass::is_routed(effect.id);
+    if !measurable {
         return Err(MultipassGpuError::NotUnmeasured(effect.id));
     }
     let max_dim = device.limits().max_texture_dimension_2d;

@@ -1,7 +1,14 @@
 # Teste GPU: rota de vários passes (AMD), cinco efeitos
 
-Status: **nenhum dos cinco efeitos foi medido na GPU.** Todos estão em `UNMEASURED_GPU_ROUTES`
-(`crates/render/src/gpufx.rs`), e `evaluate_gpu_effect` os recusa. Seguem na CPU. Passar aqui
+Status: **os cinco efeitos foram medidos na AMD e liberados para a rota GPU** (`ROUTED_ON_GPU`,
+`crates/render/src/gpufx_multipass.rs`). Saíram de `UNMEASURED_GPU_ROUTES`. Medição: GPU
+`AMD Radeon Graphics (RADV RENOIR)`, vendor 0x1002, IntegratedGpu, Vulkan, driver radv. Saída de
+`multipass_routes_match_cpu_oracle_on_adapter`: vr_blur 3.54e-7, vr_sharpen 1.91e-7, vr_denoise 5.64e-7,
+roughen_edges 2.21e-6, spacer 1.98e-6, todos com `0 values over 1e-4`. Sondas do roughen
+(stages, hash, hash_z, octave) verdes. Gates da seção 2 verdes (fmt, clippy, layers, assets).
+Histórico abaixo, mantido como referência. Riscos da seção 5 continuam valendo para parâmetros diferentes dos de `multipass_case`.
+
+Histórico: antes da medição, os cinco estavam em `UNMEASURED_GPU_ROUTES` e `evaluate_gpu_effect` os recusava. Passar aqui
 não muda rota: só mede. Sem GPU AMD, os testes de paridade falham de propósito. Isso não é paridade.
 
 | id | arquivo de kernel | plano | oráculo CPU |

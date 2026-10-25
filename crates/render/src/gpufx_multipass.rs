@@ -280,7 +280,7 @@ fn vr_route_for(e: &filmcraft_project::EffectInstance, cx: &crate::effects::FxCt
 
 /// Routes the production planner may send to the GPU. Empty until each id's parity is measured on the
 /// AMD adapter; then the id moves here and out of `UNMEASURED_GPU_ROUTES`.
-pub const ROUTED_ON_GPU: &[&str] = &[];
+pub const ROUTED_ON_GPU: &[&str] = &["vr_blur", "vr_sharpen", "vr_denoise", "roughen_edges", "spacer"];
 
 /// Whether the production planner may route `id` to the GPU multi-pass executor.
 pub fn is_routed(id: &str) -> bool {
