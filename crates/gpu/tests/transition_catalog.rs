@@ -631,7 +631,8 @@ fn assert_catalog_parity(ids: &[&str], user_project_parameters: bool) {
                         let bad: Vec<usize> = got.iter().zip(&cpu.px).enumerate().filter(|(_, (g, c))| (*g - *c).abs() > 1e-3).map(|(i, _)| i).collect();
                         if !bad.is_empty() {
                             let texel = bad[0] / 4;
-                            eprintln!("DIAG {id} p={p}: {} values over, first texel x={} y={} of {w}x{h}", bad.len(), texel % w as usize, texel / w as usize);
+                            let texels = bad.iter().map(|i| i / 4).collect::<std::collections::HashSet<_>>().len();
+                            eprintln!("DIAG {id} p={p}: {texels} of {} texels over 1e-3 ({} values), first texel x={} y={} of {w}x{h}", w * h, bad.len(), texel % w as usize, texel / w as usize);
                         }
                         assert!(got.iter().all(|v| v.is_finite()), "{id} p={p}: nonfinite");
                         // The compositor accumulates in Rgba16Float (budget 0.002, about half an 8-bit code). The
