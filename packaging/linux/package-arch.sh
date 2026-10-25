@@ -92,9 +92,6 @@ dependencies[vulkan-icd-loader]=1
 dependencies[libva]=1
 dependencies[alsa-lib]=1
 dependencies[libxkbcommon]=1
-dependencies[python]=1
-dependencies[python-numpy]=1
-dependencies[python-scipy]=1
 
 packager=${FILMCRAFT_MAINTAINER:-'FilmCraft maintainers <filmcraft@storyteller.ai>'}
 case "$packager" in *$'\n'*|*$'\r'*) echo 'packager must be a single line' >&2; exit 2 ;; esac

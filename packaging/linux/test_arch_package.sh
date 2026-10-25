@@ -29,7 +29,7 @@ rg -Fx 'arch = x86_64' "$tmp/pkginfo" >/dev/null
 rg -Fx 'pkgver = 0.11.0-1' "$tmp/pkginfo" >/dev/null
 glibc_floor=$(readelf --version-info --wide /usr/bin/true | rg -o 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -V | tail -n 1)
 rg -Fx "depend = glibc>=$glibc_floor" "$tmp/pkginfo" >/dev/null
-for dependency in gcc-libs vulkan-icd-loader alsa-lib libva python python-numpy python-scipy; do
+for dependency in gcc-libs vulkan-icd-loader alsa-lib libva; do
     rg -Fx "depend = $dependency" "$tmp/pkginfo" >/dev/null
 done
 for optional in 'optdepend = libx11:' 'optdepend = wayland:' 'optdepend = xdg-desktop-portal:'; do

@@ -22,7 +22,7 @@ use crate::{
 };
 
 const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
-pub(crate) const MAX_VA_DECODE_SURFACES: u64 = 18;
+pub(crate) const MAX_VA_DECODE_SURFACES: u64 = 18 + crate::vulkan_import::MAX_IN_FLIGHT_TRANSFERS as u64;
 fn buffer_usage() -> vk::BufferUsageFlags {
     vk::BufferUsageFlags::TRANSFER_SRC
 }

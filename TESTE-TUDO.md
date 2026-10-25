@@ -13,8 +13,8 @@ Regra: linha `skipping`, `SKIPPED`, `0 tests` ou teste ignorado NÃO conta como 
 - Ferramentas de oráculo: `ffmpeg`, `ffprobe` no PATH (ou `FILMCRAFT_FFMPEG` / `FILMCRAFT_FFPROBE`).
 
 ```bash
-git clone https://github.com/Silvazrlq/filmcraft && cd filmcraft
-git checkout integration/all
+git clone https://github.com/storytold/filmcraft && cd filmcraft
+git checkout <commit-under-test>
 ```
 
 ## 1. Gates sem GPU (rodar primeiro, na mesma máquina)
@@ -38,9 +38,9 @@ Estado medido no container de integração (sem GPU AMD, sem oráculos completos
 
 ```bash
 cargo build --release -p filmcraft-cli
-target/release/filmcraft-cli export <saida>-amd-1080p.mp4 --format h264 --hardware-export
-target/release/filmcraft-cli export <saida>-amd-4k.mp4 --format h264 --hardware-export
-target/release/filmcraft-cli export <saida>-amd-4k-hevc.mp4 --format h265 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-1080p.mp4 --project <projeto> --format h264 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-4k.mp4 --project <projeto> --format h264 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-4k-hevc.mp4 --project <projeto> --format h265 --hardware-export
 ffprobe -v error -show_streams <saida>-amd-4k.mp4
 ```
 

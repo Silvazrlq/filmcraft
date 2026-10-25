@@ -619,8 +619,8 @@ fn shape_dissolve_field(position: vec4<f32>) -> f32 {
     var delay = dissolve_hash(i32(cx), i32(cy), bitcast<u32>(params.dy));
     if order == 1u { delay = cx / params.extra0.w; }
     if order == 2u {
-        let dx = (cx + 0.5) - params.extra1.x * 0.5;
-        let dy = (cy + 0.5) - params.extra1.y * 0.5;
+        let dx = (cx + 0.5) - params.extra0.w * 0.5;
+        let dy = (cy + 0.5) - params.extra1.x * 0.5;
         delay = sqrt(dx * dx + dy * dy) / max(params.extra1.y, 1.0);
     }
     return (transition_shape_distance(params.direction, u, v) + delay * 1.5) * size * 0.5;

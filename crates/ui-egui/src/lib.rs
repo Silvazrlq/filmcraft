@@ -470,7 +470,13 @@ impl FilmcraftApp {
     pub fn set_wgpu(&mut self, rs: eframe::egui_wgpu::RenderState) {
         if let Some(why) = gpu_compositor_unsupported(&rs.adapter) {
             log::warn!("GPU compositor unavailable ({why}); CPU fallback disabled");
-            self.ui.status = format!("{} ({why})", tl!("GPU preview unavailable; CPU fallback is disabled"));
+            // A non-AMD adapter gets the CPU preview; an AMD adapter that fails the checks still fails closed.
+            if rs.adapter.get_info().vendor != 0x1002 {
+                self.cpu_composite_explicit = true;
+                self.ui.status = format!("CPU preview: {why}");
+            } else {
+                self.ui.status = format!("{} ({why})", tl!("GPU preview unavailable; CPU fallback is disabled"));
+            }
             return;
         }
         // wgpu's default reaction to a validation error or lost device can panic; record it and fail closed.

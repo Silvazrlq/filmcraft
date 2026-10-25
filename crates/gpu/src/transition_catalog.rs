@@ -493,7 +493,7 @@ impl TransitionCatalogStage {
                 if *chroma { 113 } else { 114 }
             }
             ("vr_light_rays", TransitionOp::VrLightRays { center, amount }) => {
-                words[3] = u32::from(center[0].is_some()) | (u32::from(center[1].is_some()) << 1);
+                words[2] = u32::from(center[0].is_some()) | (u32::from(center[1].is_some()) << 1);
                 words[12] = center[0].unwrap_or(0.0).to_bits();
                 words[13] = center[1].unwrap_or(0.0).to_bits();
                 words[14] = amount.to_bits();

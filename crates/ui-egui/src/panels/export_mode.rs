@@ -47,6 +47,9 @@ pub struct ExportUi {
     /// On the GPU route, encode with NVIDIA NVENC instead of AMD VA-API. Ignored while `cpu_export`
     /// is on. Missing from older files, it reads as false (AMD).
     pub nvenc_export: bool,
+    /// Whether the AMD VA-API export admission is available (set by the panel each frame). Not saved.
+    #[serde(skip)]
+    pub amd_available: bool,
     /// File name without extension, and the folder.
     pub file_name: String,
     pub location: String,
@@ -74,6 +77,7 @@ impl Default for ExportUi {
             settings: preset,
             cpu_export: false,
             nvenc_export: false,
+            amd_available: true,
             file_name: String::new(),
             location: String::new(),
             range: "entire".into(),
@@ -136,7 +140,8 @@ fn gpu_capable(s: &ExportSettings) -> bool {
 /// rendering with `HardwareEncoding::NvencRequired`, which fails closed rather than falling back.
 pub fn effective_settings(ex: &ExportUi) -> ExportSettings {
     let mut s = ex.settings.clone();
-    let gpu = !ex.cpu_export && gpu_capable(&s);
+    // Without AMD admission the default route falls back to CPU (never Auto); NVENC does not need it.
+    let gpu = !ex.cpu_export && gpu_capable(&s) && (ex.nvenc_export || ex.amd_available);
     if gpu && ex.nvenc_export {
         s.set_hardware_export(false);
         s.hardware_encoding = HardwareEncoding::NvencRequired;
@@ -1140,6 +1145,7 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
     let t = app.tokens;
     let mut reg = Reg::default();
     let Some(q) = app.session.active_sequence().cloned() else { return };
+    app.ui.export.amd_available = app.session.amd_export_provider.is_some();
     let rate = q.settings.frame_rate;
     // preview (aspect of the output frame)
     let r = app.ui.export.settings.resolve(q.settings.width, q.settings.height, rate, q.settings.sample_rate);

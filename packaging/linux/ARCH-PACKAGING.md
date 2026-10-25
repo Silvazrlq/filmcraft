@@ -11,7 +11,7 @@ The helper creates gzip-compressed .MTREE with root ownership; its manifest incl
 From the 0.11.0 repo root, after guarded x86_64 release binaries are ready:
 
 ```sh
-rtk env \
+env \
   CARGO_TARGET_DIR=target \
   FILMCRAFT_DEB_ARCHES=x86_64 \
   FILMCRAFT_PACKAGE_VERSION=0.11.0-1 \

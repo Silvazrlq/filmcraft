@@ -312,7 +312,7 @@ mod resident_reservation_tests {
     use crate::Tick;
     use std::sync::{Mutex, OnceLock};
 
-    fn lock_ledger() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn lock_ledger() -> std::sync::MutexGuard<'static, ()> {
         static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }

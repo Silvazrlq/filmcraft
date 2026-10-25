@@ -22,9 +22,9 @@ Crie (ou abra) uma sequência de 1920x1080 e outra de 3840x2160 no projeto de te
 ### AMD (VA-API, via DMA-BUF)
 
 ```sh
-target/release/filmcraft-cli export <saida>-amd-1080p.mp4 --format h264 --hardware-export
-target/release/filmcraft-cli export <saida>-amd-4k.mp4 --format h264 --hardware-export
-target/release/filmcraft-cli export <saida>-amd-4k-hevc.mp4 --format h265 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-1080p.mp4 --project <projeto> --format h264 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-4k.mp4 --project <projeto> --format h264 --hardware-export
+target/release/filmcraft-cli export <saida>-amd-4k-hevc.mp4 --project <projeto> --format h265 --hardware-export
 ```
 
 O AMD usa `--hardware-export` (rota residente, com DMA-BUF no mesmo nó DRM da GPU AMD). Para NVIDIA use `--hardware-encoding nvencRequired`; para aceitar qualquer GPU use `--hardware-encoding gpuRequired`.
@@ -36,8 +36,8 @@ concluir por CPU.
 ### NVIDIA (NVENC)
 
 ```sh
-target/release/filmcraft-cli export <saida>-nv-1080p.mp4 --format h264 --hardware-encoding nvencRequired
-target/release/filmcraft-cli export <saida>-nv-4k.mp4 --format h264 --hardware-encoding nvencRequired
+target/release/filmcraft-cli export <saida>-nv-1080p.mp4 --project <projeto> --format h264 --hardware-encoding nvencRequired
+target/release/filmcraft-cli export <saida>-nv-4k.mp4 --project <projeto> --format h264 --hardware-encoding nvencRequired
 ```
 
 Esperado: concluída; `ffprobe` mostra 3840x2160. NVENC H.265 no Linux não é suportado nesta versão:
@@ -46,7 +46,7 @@ a exportação deve falhar com erro explícito (não cair para VA-API nem CPU).
 ### Sem GPU requerida (referência)
 
 ```sh
-target/release/filmcraft-cli export <saida>-cpu-4k.mp4 --format h264
+target/release/filmcraft-cli export <saida>-cpu-4k.mp4 --project <projeto> --format h264
 ```
 
 ## O que confirmar

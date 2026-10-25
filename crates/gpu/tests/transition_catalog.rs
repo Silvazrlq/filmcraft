@@ -252,6 +252,7 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture, w: 
 }
 
 #[test]
+#[ignore = "AMD Vulkan only: run on the AMD PC with --ignored"]
 fn catalog_dissolve_kernels_match_transparent_cpu_oracle() {
     // Only the allowlist must match the CPU oracle: the other ids fail closed in the strict export
     // and are measured one by one by `per_id_parity_report`.
@@ -273,26 +274,25 @@ fn per_id_parity_report() {
 }
 
 #[test]
+#[ignore = "AMD Vulkan only: run on the AMD PC with --ignored"]
 fn user_project_transition_kernels_match_cpu_oracle() {
     assert_catalog_parity(&["flare", "blur_dissolve", "dip_to_black", "dip_to_white"], true);
 }
 
 #[test]
+#[ignore = "AMD Vulkan only: run on the AMD PC with --ignored"]
 fn preview_transition_parameter_ranges_match_cpu_oracle() {
     assert_catalog_parity(&["flare", "blur_dissolve", "dip_to_black", "dip_to_white"], false);
 }
 
 fn assert_catalog_parity(ids: &[&str], user_project_parameters: bool) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN, ..wgpu::InstanceDescriptor::new_without_display_handle() });
-    let adapter = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN))
-        .into_iter()
-        .find(|adapter| {
-            let info = adapter.get_info();
-            info.backend == wgpu::Backend::Vulkan
-                && info.vendor == 0x1002
-                && matches!(info.device_type, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu)
-        })
-    ;
+    let adapter = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN)).into_iter().find(|adapter| {
+        let info = adapter.get_info();
+        info.backend == wgpu::Backend::Vulkan
+            && info.vendor == 0x1002
+            && matches!(info.device_type, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu)
+    });
     let Some(adapter) = adapter else {
         if std::env::var_os("FILMCRAFT_REQUIRE_AMD").is_some() {
             panic!("GPU transition parity requires a physical AMD Vulkan adapter (vendor 0x1002); no adapter is not a pass");

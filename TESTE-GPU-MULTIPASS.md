@@ -21,12 +21,12 @@ Harness: `MULTIPASS_ROUTES` (`crates/render/src/gpufx_multipass.rs`) lista os ci
 
 - Linux com GPU AMD (vendor 0x1002), Mesa/RADV ou amdgpu-pro.
 - Rust estável recente e `cargo`.
-- Branch `feat/gpu-multipass-all`.
+- Commit sob teste (o projeto, não o fork nem um branch antigo).
 
 ```bash
-git clone https://github.com/Silvazrlq/filmcraft ~/filmcraft-multipass
+git clone https://github.com/storytold/filmcraft ~/filmcraft-multipass
 cd ~/filmcraft-multipass
-git checkout feat/gpu-multipass-all
+git checkout <commit-under-test>
 ```
 
 Fontes opcionais (só para os testes de texto): `git clone https://github.com/storytold/craft-fonts ../craft-fonts`

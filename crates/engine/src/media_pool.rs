@@ -517,7 +517,10 @@ impl filmcraft_render::SourceProvider for PoolProvider {
         if !self.full_res {
             return Err(MediaError::Unsupported("compressed input requires full-resolution provider".into()));
         }
-        let source = self.pool.open_full_res_h264_source(&self.project, item, &*self.services).map_err(|error| MediaError::Unsupported(error.to_string()))?;
+        let source = self.pool.open_full_res_h264_source(&self.project, item, &*self.services).map_err(|error| match error {
+            crate::EngineError::Media(inner) => inner,
+            other => MediaError::Unsupported(other.to_string()),
+        })?;
         Ok(Arc::new(source))
     }
 }

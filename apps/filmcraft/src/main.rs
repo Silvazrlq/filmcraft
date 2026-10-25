@@ -197,7 +197,6 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             filmcraft_ui_egui::graphics_notice::GraphicsNotice::new(graphics.mode().label(), Box::new(move || start.reset_to_default()))
         });
         #[cfg(target_os = "linux")]
-        #[cfg(target_os = "linux")]
         let amd_provider_enabled = graphics.mode() == graphics::Mode::Default;
         let confirmed = AtomicBool::new(false);
         cc.egui_ctx.on_end_pass(

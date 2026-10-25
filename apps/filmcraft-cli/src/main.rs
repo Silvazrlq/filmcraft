@@ -133,7 +133,7 @@ SUBCOMMANDS
   inspect [project|sequence]    project tree or active sequence as JSON (default: both)
   import <file>...              import media into the project
   export <out> [--preset name] [--format f] [--range r] [--start s --end s] [--settings json]
-         [--hardware-export] [--hardware-encoding off|auto|gpuRequired|amdRequired|nvencRequired]
+         [--hardware-export] [--hardware-encoding off|auto|gpuRequired|nvencRequired]
          [--scale f] [--quality 0-100] [--no-audio] [--queue] [--allow-offline]
                                 export the active sequence and wait for it to finish: with an
                                 export preset (`export --list-presets`; built-in or the user's), or

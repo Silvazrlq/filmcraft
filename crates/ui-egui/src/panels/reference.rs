@@ -58,7 +58,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     elems.push(("reference.picture".into(), pic, "reference frame".into()));
                 }
             } else {
-                app.ui.status = tl!("Reference Monitor unavailable in GPU-only preview; CPU fallback is disabled").into();
+                ui.painter().text(
+                    pic.center(),
+                    Align2::CENTER_CENTER,
+                    tl!("Reference Monitor unavailable in GPU-only preview; CPU fallback is disabled"),
+                    Tokens::ui(12.0),
+                    t.text_dim,
+                );
             }
         }
         RefDisplay::Scopes => {

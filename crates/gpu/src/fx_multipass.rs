@@ -104,6 +104,7 @@ where
 impl MultipassRunner {
     /// Builds one compute pipeline per entry point in `kernels`, all from the same WGSL module.
     pub(crate) fn new(device: &wgpu::Device, wgsl: &str, kernels: &[&'static str]) -> Result<Self, MultipassGpuError> {
+        let _device_scopes = crate::device_scope::lock();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("fx-multipass"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -179,6 +180,7 @@ impl MultipassRunner {
         plan.intermediate_bytes(size.0, size.1).map_err(MultipassGpuError::Plan)?;
         check_kernels(|name| self.kernels.iter().any(|(n, _)| *n == name), plan)?;
         // Scopes are popped on every path, so a failure never leaves the device's scope stack open.
+        let _device_scopes = crate::device_scope::lock();
         let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let recorded = self.build(device, plan, source, size);
