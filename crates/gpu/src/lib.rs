@@ -154,6 +154,15 @@ pub const TRANSITION_AMD_PARITY: &[&str] = &[
     "vr_chroma_leaks",
     "vr_light_leaks",
     "vr_spherical_blur",
+    "clock_wipe",
+    "cross_zoom",
+    "cross_zoom_legacy",
+    "plateau_wipe",
+    "shape_dissolve",
+    "travel_motion",
+    "tv_power",
+    "vr_light_rays",
+    "zoom_blur",
 ];
 
 /// Effects with recorded CPU parity on the AMD adapter (22/10/2026, 0.10): every case of
