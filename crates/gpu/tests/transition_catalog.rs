@@ -628,6 +628,11 @@ fn assert_catalog_parity(ids: &[&str], user_project_parameters: bool) {
                         let got = read(&device, &queue, &output, w, h, format);
                         let cpu = apply_scaled(&effect, &oracle[0], &oracle[1], p, 0.5);
                         let worst = got.iter().zip(&cpu.px).map(|(g, c)| (g - c).abs()).fold(0.0f32, f32::max);
+                        let bad: Vec<usize> = got.iter().zip(&cpu.px).enumerate().filter(|(_, (g, c))| (*g - *c).abs() > 1e-3).map(|(i, _)| i).collect();
+                        if !bad.is_empty() {
+                            let texel = bad[0] / 4;
+                            eprintln!("DIAG {id} p={p}: {} values over, first texel x={} y={} of {w}x{h}", bad.len(), texel % w as usize, texel / w as usize);
+                        }
                         assert!(got.iter().all(|v| v.is_finite()), "{id} p={p}: nonfinite");
                         // The compositor accumulates in Rgba16Float (budget 0.002, about half an 8-bit code). The
                         // Rgba32Float run only checks that the kernel does the same maths, to half that budget.

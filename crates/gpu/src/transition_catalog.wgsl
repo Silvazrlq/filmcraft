@@ -690,7 +690,12 @@ fn dissolve_extra(position: vec4<f32>) -> vec4<f32> {
     let uv = position.xy / size;
     if params.kernel == 13u {
         let aspect = size.x / max(size.y, 1.0);
-        let angle = atan2(-(uv.y - 0.5), (uv.x - 0.5) * aspect) / 6.283185307179586;
+        // same convention as the CPU clock/radial wipe: atan2(dx, -dy), not the rotated atan2(-dy, dx)
+        // the exact centre pixel: CPU atan2(+0, -0) is pi, but GPUs may return 0 for signed zero, so pin it to the CPU value
+        let dx = (uv.x - 0.5) * aspect;
+        let dy = -(uv.y - 0.5);
+        let centre = dx == 0.0 && dy == 0.0;
+        let angle = select(atan2(dx, dy), 3.141592653589793, centre) / 6.283185307179586;
         let mix_b = 1.0 - legacy_step(p, fract(angle));
         return mix(a, b, mix_b);
     }
