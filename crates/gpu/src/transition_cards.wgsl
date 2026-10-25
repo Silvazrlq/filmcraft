@@ -31,13 +31,13 @@ fn cards_page_peel(xy: vec2<f32>, p: f32, corner: u32, radius: f32, shadow: bool
 
     let d = f - s;
     if d >= 0.0 && d < radius {
-        let phi_back = 3.141592653589793 - asin(d / radius);
+        let phi_back = 3.141592653589793 - asin(clamp(d / radius, 0.0, 1.0));
         let so_back = f - radius * phi_back;
         let src_back = xy - normal * (s - so_back);
         if cards_page_inside(src_back, extent) {
             return cards_page_back(sample_clamped(0u, src_back, vec2<u32>(extent)), 0.75 + 0.25 * sin(phi_back));
         }
-        let phi_front = asin(d / radius);
+        let phi_front = asin(clamp(d / radius, 0.0, 1.0));
         let so_front = f - radius * phi_front;
         let src_front = xy - normal * (s - so_front);
         if cards_page_inside(src_front, extent) {
