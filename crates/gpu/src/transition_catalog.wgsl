@@ -245,7 +245,8 @@ fn vr_light_rays(position: vec4<f32>) -> vec4<f32> {
     let rx = rem_euclid(xy.x - cx + extent.x * 0.5, extent.x) - extent.x * 0.5;
     let ry = xy.y - cy;
     // atan2(0, 0) is undefined in WGSL (AMD can return NaN at the centre pixel); CPU gives 0
-    let a = select(atan2(ry, rx), 0.0, rx == 0.0 && ry == 0.0);
+    var a = 0.0;
+    if rx != 0.0 || ry != 0.0 { a = atan2(ry, rx); }
     let r = length(vec2(rx, ry)) / extent.y;
     let rays = pow(0.5 + 0.5 * sin(a * 23.0 + p * 3.0) * cos(a * 7.0 - p * 2.0), 6.0);
     let fall = exp(-r * 1.5);
@@ -257,7 +258,10 @@ fn vr_light_rays(position: vec4<f32>) -> vec4<f32> {
 fn vr_mobius_sample(side: u32, xy: vec2<f32>, zoom: f32, twist: f32, extent: vec2<f32>, rmax: f32) -> vec4<f32> {
     let d = xy - extent * 0.5;
     let r = length(d);
-    let a = select(atan2(d.y, d.x), 0.0, r == 0.0) + twist * max(1.0 - r / rmax, 0.0);
+    // select() evaluates atan2(0,0) too, and AMD returns NaN there; branch so it is never evaluated at the centre
+    var base = 0.0;
+    if r > 0.0 { base = atan2(d.y, d.x); }
+    let a = base + twist * max(1.0 - r / max(rmax, 1e-6), 0.0);
     let r2 = r / zoom;
     return vr_sample_wrap(side, extent * 0.5 + r2 * vec2(cos(a), sin(a)), vec2<u32>(extent));
 }

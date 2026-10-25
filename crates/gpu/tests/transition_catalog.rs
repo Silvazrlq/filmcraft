@@ -286,6 +286,8 @@ fn preview_transition_parameter_ranges_match_cpu_oracle() {
 }
 
 fn assert_catalog_parity(ids: &[&str], user_project_parameters: bool) {
+    let mut divergent = 0usize;
+    let mut failure: Option<String> = None;
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN, ..wgpu::InstanceDescriptor::new_without_display_handle() });
     let adapter = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN)).into_iter().find(|adapter| {
         let info = adapter.get_info();
@@ -629,6 +631,7 @@ fn assert_catalog_parity(ids: &[&str], user_project_parameters: bool) {
                         let cpu = apply_scaled(&effect, &oracle[0], &oracle[1], p, 0.5);
                         let worst = got.iter().zip(&cpu.px).map(|(g, c)| (g - c).abs()).fold(0.0f32, f32::max);
                         let bad: Vec<usize> = got.iter().zip(&cpu.px).enumerate().filter(|(_, (g, c))| (*g - *c).abs() > 1e-3).map(|(i, _)| i).collect();
+                        divergent += got.chunks(4).zip(cpu.px.chunks(4)).filter(|(g, c)| g.iter().zip(c.iter()).any(|(a, b)| (a - b).abs() > 1e-3)).count();
                         if !bad.is_empty() {
                             let texel = bad[0] / 4;
                             eprintln!("DIAG {id} p={p}: {} values over, first texel x={} y={} of {w}x{h}", bad.len(), texel % w as usize, texel / w as usize);
@@ -637,10 +640,17 @@ fn assert_catalog_parity(ids: &[&str], user_project_parameters: bool) {
                         // The compositor accumulates in Rgba16Float (budget 0.002, about half an 8-bit code). The
                         // Rgba32Float run only checks that the kernel does the same maths, to half that budget.
                         let tolerance = if format == wgpu::TextureFormat::Rgba16Float { 0.002 } else { 1e-3 };
-                        assert!(worst < tolerance, "{id} {format:?} p={p}: max RGBA delta {worst} (tolerance {tolerance})");
+                        // Recorded, not asserted, so the report sees every p; the first failure still fails the test below.
+                        if worst >= tolerance && failure.is_none() {
+                            failure = Some(format!("{id} {format:?} p={p}: max RGBA delta {worst} (tolerance {tolerance})"));
+                        }
                     }
                 }
             }
         }
+    }
+    eprintln!("DIVERGENT {ids:?}: {divergent} texels with max RGBA delta > 1e-3");
+    if let Some(msg) = failure {
+        panic!("{msg}");
     }
 }
