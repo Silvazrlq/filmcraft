@@ -16,7 +16,8 @@ fn flip_motion_card_sample(xy: vec2<f32>, extent: vec2<f32>, q: f32, flip: bool)
     let e = select(spin_e, flip_e, flip);
     let angle = e * 3.141592653589793 * sign;
     let z = select(0.8, 0.25, flip) * flip_motion_bell(q) * max(extent.x, extent.y);
-    let c = cos(angle);
+    var c = cos(angle);
+    if abs(c) < 1e-5 { c = 0.0; } // edge-on: same snap as the CPU rot_x/rot_y, no front/back flip on f32 noise
     let s = sin(angle);
     let center = extent * 0.5;
     var origin: vec3<f32>;
@@ -130,7 +131,8 @@ fn spinback_3d_card_sample(xy: vec2<f32>, extent: vec2<f32>, q: f32) -> vec4<f32
     let angle = select(amount, -amount, q >= 0.5) * 1.5707963267948966 * sign;
     let depth = clamp(params.extra0.x * 0.01, 0.0, 1.0);
     let z = depth * max(extent.x, extent.y) * 1.5 * flip_motion_bell(q);
-    let c = cos(angle);
+    var c = cos(angle);
+    if abs(c) < 1e-5 { c = 0.0; } // edge-on: same snap as the CPU rot_x/rot_y
     let s = sin(angle);
     let center = extent * 0.5;
     var origin: vec3<f32>;
