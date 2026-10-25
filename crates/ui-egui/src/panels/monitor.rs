@@ -174,7 +174,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
     let saved_clip = ui.clip_rect();
     ui.set_clip_rect(saved_clip.intersect(if mv.zoom.is_some() && !compare { video_area } else { picture_area.expand(12.0) }));
     if show_picture {
-        ui.painter().rect_filled(pic, 0.0, t.monitor_bg);
+        if mv.transparency_grid {
+            monitor_view::transparency_grid(ui.painter(), pic, ui.clip_rect());
+        } else {
+            ui.painter().rect_filled(pic, 0.0, t.monitor_bg);
+        }
         let playing = if which == Which::Program { app.playback.playing } else { app.source_playback.clock.playing };
         let res = mv.effective_res(playing);
         // frame pixels per screen pixel along the axis that needs the most of them
@@ -187,11 +191,16 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         };
         let size_key = (scale * 1000.0) as u32;
         let channel = display.is_channel();
-        let gpu_preview = which == Which::Program && !crate::panels::menu_dialogs::software_renderer(app);
+        // the GPU compositor's output is opaque, so the Transparency Grid takes the CPU frames
+        let grid = mv.transparency_grid && !channel;
+        let gpu_preview = which == Which::Program && !grid && !crate::panels::menu_dialogs::software_renderer(app);
         let gpu_available = app.gpu.as_ref().is_some_and(|gpu| !gpu.broken.load(std::sync::atomic::Ordering::Relaxed));
+        // render previews are opaque, so the grid and Display Mode ▸ Alpha take live renders
+        let live = grid || display == DisplayMode::Alpha;
         let cpu_target = target;
         let target = match (gpu_preview, target) {
             (true, Target::Sequence(s)) => Target::SequencePlan(s),
+            (false, Target::Sequence(s)) if live => Target::SequenceLive(s),
             (_, t) => t,
         };
         // Draft decoding (opt-in): only while playing at 1/2 resolution or lower.
@@ -215,7 +224,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
             app.frames.request(key, rate.tick_of(frame), scale, &project, 0);
         }
         let asked = asked_before(app, prefix, key, playing);
-        let tex_name = if channel { format!("monitor-{prefix}-{display:?}") } else { format!("monitor-{prefix}") };
+        let tex_name = if channel {
+            format!("monitor-{prefix}-{display:?}")
+        } else if grid {
+            format!("monitor-{prefix}-grid")
+        } else {
+            format!("monitor-{prefix}")
+        };
         let (shown, on_screen) = if gpu_preview {
             if !gpu_available {
                 (None, None)
@@ -250,6 +265,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
                     }
                 }
             }
+        } else if grid {
+            cpu_texture_as(app, &ctx, &tex_name, key, &asked, display, true)
         } else {
             cpu_texture(app, &ctx, &tex_name, key, &asked, display)
         };
@@ -275,7 +292,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         }
         if let Some(ra) = ref_area {
             let rpic = fit(ra, display_w, frame_size.1 as f32);
-            ui.painter().rect_filled(rpic, 0.0, t.monitor_bg);
+            if mv.transparency_grid {
+                monitor_view::transparency_grid(ui.painter(), rpic, ui.clip_rect());
+            } else {
+                ui.painter().rect_filled(rpic, 0.0, t.monitor_bg);
+            }
             if gpu_preview {
                 ui.painter().text(
                     rpic.center(),
@@ -286,9 +307,18 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
                 );
             } else {
                 let rf = rate.frame_at(Tick(mv.compare_ref.unwrap_or(time.0)));
-                let rkey = FrameKey { target: cpu_target, frame: rf, size: size_key, revision: rev, draft: false };
+                let rtarget = match cpu_target {
+                    Target::Sequence(s) if mv.transparency_grid => Target::SequenceLive(s),
+                    t => t,
+                };
+                let rkey = FrameKey { target: rtarget, frame: rf, size: size_key, revision: rev, draft: false };
                 app.frames.request(rkey, rate.tick_of(rf), scale, &project, 1);
-                if let (Some(tex), _) = cpu_texture(app, &ctx, &format!("monitor-{prefix}-ref"), rkey, &[], DisplayMode::Composite) {
+                let (reference, _) = if mv.transparency_grid {
+                    cpu_texture_as(app, &ctx, &format!("monitor-{prefix}-ref-grid"), rkey, &[], DisplayMode::Composite, true)
+                } else {
+                    cpu_texture(app, &ctx, &format!("monitor-{prefix}-ref"), rkey, &[], DisplayMode::Composite)
+                };
+                if let Some(tex) = reference {
                     ui.painter().image(tex, rpic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 }
             }
@@ -541,6 +571,19 @@ fn cpu_texture(
     asked: &[FrameKey],
     mode: DisplayMode,
 ) -> (Option<egui::TextureId>, Option<FrameKey>) {
+    cpu_texture_as(app, ctx, name, key, asked, mode, false)
+}
+
+/// [`cpu_texture`], keeping the frame's alpha when `alpha` is set (the Transparency Grid).
+fn cpu_texture_as(
+    app: &mut FilmcraftApp,
+    ctx: &egui::Context,
+    name: &str,
+    key: FrameKey,
+    asked: &[FrameKey],
+    mode: DisplayMode,
+    alpha: bool,
+) -> (Option<egui::TextureId>, Option<FrameKey>) {
     let found = app
         .frames
         .get(&key)
@@ -551,6 +594,8 @@ fn cpu_texture(
         Some((k, img)) => {
             let tex = if mode.is_channel() {
                 app.texture_for_mapped(ctx, name, k, &img, |i| monitor_view::channel_view(i, mode))
+            } else if alpha {
+                app.texture_with_alpha(ctx, name, k, &img)
             } else {
                 app.texture_for(ctx, name, k, &img)
             };
