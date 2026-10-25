@@ -78,7 +78,7 @@ fn motion_roll3d_card(origin: vec3<f32>, ex: vec3<f32>, ey: vec3<f32>, eye: vec3
 fn motion_roll3d_apply(xy: vec2<f32>, extent: vec2<f32>, p: f32, direction: u32, perspective: f32) -> vec4<f32> {
     let horizontal = direction == 1u || direction == 3u;
     let side = select(extent.y, extent.x, horizontal);
-    let sign = select(select(1.0, -1.0, direction == 2u), select(-1.0, 1.0, direction == 3u), horizontal);
+    let sign = select(select(-1.0, 1.0, direction == 2u), select(-1.0, 1.0, direction == 3u), horizontal);
     let focal = max(max(extent.x, extent.y) * (6.0 - 5.0 * clamp(perspective * 0.01, 0.0, 1.0)), max(extent.x, extent.y) * 0.6);
     let center = vec3(extent * 0.5, side * 0.5);
     let eye = vec3(extent * 0.5, -max(focal, 1.0));
@@ -165,8 +165,8 @@ fn motion_apply(position: vec4<f32>) -> vec4<f32> {
     }
     if op == 62u {
         let shift = extent.x * 0.5 * p;
-        let left = select(vec4(0.0), motion_sample_raw(0u, xy + vec2(shift, 0.0), extent_i), xy.x < extent.x * 0.5 - shift);
-        let right = select(vec4(0.0), motion_sample_raw(0u, xy - vec2(shift, 0.0), extent_i), xy.x >= extent.x * 0.5 + shift);
+        let left = legacy_split_sample(0u, xy + vec2(shift, 0.0), extent_i, vec2(-1e9, -1e9), vec2(extent.x * 0.5, 1e9));
+        let right = legacy_split_sample(0u, xy - vec2(shift, 0.0), extent_i, vec2(extent.x * 0.5, -1e9), vec2(1e9, 1e9));
         return motion_over(right, motion_over(left, textureLoad(incoming, vec2<i32>(xy), 0)));
     }
     if op == 59u {
