@@ -166,6 +166,7 @@ pub const TRANSITION_AMD_PARITY: &[&str] = &[
     "center_split",
     "split_legacy",
     "band_slide",
+    "block_motion",
 ];
 
 /// Effects with recorded CPU parity on the AMD adapter (22/10/2026, 0.10): every case of
