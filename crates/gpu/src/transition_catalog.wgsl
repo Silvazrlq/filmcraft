@@ -130,12 +130,20 @@ fn legacy_band_slide(xy: vec2<f32>, extent: vec2<f32>) -> vec4<f32> {
     return out;
 }
 
+// floor(v / c) checked with exact multiplies: AMD's f32 division can round a pixel into the neighbouring cell, which CPU does not
+fn cell_index(v: f32, c: f32) -> f32 {
+    var i = floor(v / c);
+    if (i + 1.0) * c <= v { i += 1.0; }
+    if i * c > v { i -= 1.0; }
+    return i;
+}
+
 fn legacy_text_cells(xy: vec2<f32>, extent: vec2<f32>) -> vec4<f32> {
     let cols = params.blur;
     let rows = params.amount;
     let cell = extent / vec2(cols, rows);
-    let ci = min(floor(xy.x / cell.x), cols - 1.0);
-    let ri = min(floor(xy.y / cell.y), rows - 1.0);
+    let ci = min(cell_index(xy.x, cell.x), cols - 1.0);
+    let ri = min(cell_index(xy.y, cell.y), rows - 1.0);
     let index = ri * cols + ci;
     if params.kernel == 103u {
         let current = floor(params.progress * cols * rows);
@@ -181,10 +189,12 @@ fn vr_random_blocks(position: vec4<f32>) -> vec4<f32> {
 fn vr_sample_wrap(side: u32, at: vec2<f32>, extent: vec2<u32>) -> vec4<f32> {
     let width = i32(extent.x);
     let height = i32(extent.y);
+    // rem_euclid can return exactly `width` for tiny negatives; wrap it like CPU sample_wrap does
     let xw = rem_euclid(at.x - 0.5, f32(width));
-    let x0 = i32(floor(xw));
+    let xf = floor(xw);
+    let x0 = i32(xf) % width;
     let x1 = (x0 + 1) % width;
-    let tx = xw - f32(x0);
+    let tx = xw - xf;
     let fy = clamp(at.y - 0.5, 0.0, f32(height - 1));
     let y0 = i32(floor(fy));
     let y1 = min(y0 + 1, height - 1);
