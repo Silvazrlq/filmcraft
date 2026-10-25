@@ -230,8 +230,8 @@ fn motion_apply(position: vec4<f32>) -> vec4<f32> {
                 sa = 1.0 - zoom * motion_bell(q);
                 sb = sa;
                 let step = travel * 1.08;
-                oa = d * step * e;
-                ob = d * step * (e - 1.0);
+                oa = d * step * e * sa;
+                ob = d * step * (e - 1.0) * sb;
             }
             let a = motion_affine_sample(0u, xy, extent, oa, sa, 0.0);
             let b = motion_affine_sample(1u, xy, extent, ob, sb, 0.0);
@@ -318,6 +318,29 @@ fn motion_apply(position: vec4<f32>) -> vec4<f32> {
             else { sum += color_b; }
         }
         return sum / f32(count);
+    }
+    if op == 35u {
+        // Pop: A shrinks and fades out, B overshoots in from the centre (CPU motion.rs "pop_motion").
+        let center = extent * 0.5;
+        let overshoot = params.extra0.x * 0.04;
+        let mb = clamp(params.extra0.y * 0.01, 0.0, 1.0);
+        let count = select(1u, clamp(u32(ceil(mb * 12.0)), 2u, 12u), mb > 0.0);
+        let rect = vec4(0.0, 0.0, extent.x, extent.y);
+        var total = vec4(0.0);
+        for (var i = 0u; i < count; i++) {
+            var q = p;
+            if count > 1u { q = clamp(p + (f32(i) / f32(count - 1u) - 0.5) * (0.05 * mb), 0.0, 1.0); }
+            let ka = min(q / 0.6, 1.0);
+            let sa = 1.0 - 0.3 * ka * ka * ka;
+            let ub = clamp((q - 0.15) / 0.85, 0.0, 1.0) - 1.0;
+            let sb = max(1.0 + (overshoot + 1.0) * ub * ub * ub + overshoot * ub * ub, 0.0);
+            let local_a = center + (xy - center) / sa;
+            let local_b = center + (xy - center) / max(sb, 1e-3);
+            let ca = sample_clamped(0u, local_a, extent_u) * (motion_coverage(local_a, rect) * (1.0 - smoothstep(0.35, 0.8, q)));
+            let cb = sample_clamped(1u, local_b, extent_u) * (motion_coverage(local_b, rect) * smoothstep(0.1, 0.3, q));
+            total += motion_over(cb, ca);
+        }
+        return total / f32(count);
     }
     if op == 47u {
         let zoom = params.extra0.x * 0.01;

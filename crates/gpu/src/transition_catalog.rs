@@ -337,11 +337,12 @@ fn pack_field_wipe(words: &mut [u32; 32], p: &filmcraft_render::transitions::gpu
             words[2] = direction;
             words[21] = (panels as f32).to_bits();
         }
-        FieldWipeKind::Plateau { angle_degrees, .. } => {
+        FieldWipeKind::Plateau { angle_degrees, plateaus } => {
             let (dx, dy) = direction(angle_degrees);
             words[6] = dx.to_bits();
             words[7] = dy.to_bits();
             words[16] = angle_degrees.to_bits();
+            words[21] = (plateaus as f32).to_bits();
         }
         FieldWipeKind::BarnDoors { center, orientation } => {
             words[2] = orientation;
