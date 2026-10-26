@@ -19,7 +19,7 @@ filmcraft-render = { workspace = true }
 filmcraft-time = { workspace = true }
 wgpu = { version = "30", default-features = false, features = ["wgsl"] }
 log = { workspace = true }
-pollster = "0.4"
+pollster = "1"
 rayon = { workspace = true }
 
 # Vulkan backend for the strict AMD export; the web build (wasm32) has no Vulkan.
@@ -28,7 +28,7 @@ wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 
 [dev-dependencies]
 naga = "30"
-pollster = "0.4"
+pollster = "1"
 filmcraft-export = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 wgpu = { version = "30", features = ["wgsl", "metal", "vulkan", "dx12", "gles"] }
