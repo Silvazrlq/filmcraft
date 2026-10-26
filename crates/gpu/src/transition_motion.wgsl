@@ -412,7 +412,7 @@ fn motion_apply(position: vec4<f32>) -> vec4<f32> {
             } else if all(bx >= vec2(0.0)) && all(bx < extent) {
                 total += sample_clamped(1u, bx, extent_u);
             } else {
-                let along = select(ax.x, ax.y, horizontal);
+                let along = select(ax.y, ax.x, horizontal);
                 let edge_band = across / across_len < 0.12 || across / across_len > 0.88;
                 let f = fract(across / pitch);
                 let remainder = along - floor(along / (travel + gap)) * (travel + gap);
