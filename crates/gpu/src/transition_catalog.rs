@@ -364,6 +364,7 @@ fn pack_field_wipe(words: &mut [u32; 32], p: &filmcraft_render::transitions::gpu
 
 pub struct TransitionCatalogStage {
     pipeline: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
     lights: Mutex<light_multipass::TransitionLightMultipassStage>,
     blur: Mutex<crate::transition_blur_stage::TransitionBlurStage>,
 }
@@ -435,6 +436,7 @@ impl TransitionCatalogStage {
         });
         Self {
             pipeline,
+            format,
             lights: Mutex::new(light_multipass::TransitionLightMultipassStage::new(device, format)),
             blur: Mutex::new(crate::transition_blur_stage::TransitionBlurStage::new(device, format)),
         }
@@ -920,6 +922,9 @@ impl TransitionCatalogStage {
                 return self.lights.lock().unwrap_or_else(std::sync::PoisonError::into_inner).draw(device, queue, canvas, inputs, size, op);
             }
         }
+        if plan.id == "whip" {
+            return self.draw_whip(device, queue, canvas, inputs, size, params);
+        }
         let bytes: Vec<u8> = params.iter().flat_map(|v| v.to_le_bytes()).collect();
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("transition-catalog"),
@@ -955,6 +960,81 @@ impl TransitionCatalogStage {
             pass.draw(0..3, 0..1);
         }
         queue.submit([encoder.finish()]);
+        Ok(())
+    }
+
+    /// Whip with motion blur as two passes, like the CPU shutter: the scene goes to a scratch
+    /// texture (pass 0), then a linear blur over it lands on the canvas (pass 1). `words[16]` selects the pass.
+    fn draw_whip(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        canvas: &wgpu::TextureView,
+        inputs: [&wgpu::TextureView; 2],
+        size: (u32, u32),
+        mut words: [u32; 32],
+    ) -> Result<(), TransitionCatalogError> {
+        let limits = device.limits();
+        if size.0 > limits.max_texture_dimension_2d || size.1 > limits.max_texture_dimension_2d {
+            return Err(TransitionCatalogError::InvalidSize);
+        }
+        let _device_scopes = crate::device_scope::lock();
+        let oom_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transition-whip-scratch"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let scratch = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("transition-whip") });
+        for pass in 0..2u32 {
+            words[16] = (pass as f32).to_bits();
+            let bytes: Vec<u8> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("transition-whip"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let sources = if pass == 0 { inputs } else { [&scratch, &scratch] };
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("transition-whip"),
+                layout: &self.pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(sources[0]) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(sources[1]) },
+                    wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
+                ],
+            });
+            let (target, load) = if pass == 0 { (&scratch, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)) } else { (canvas, wgpu::LoadOp::Load) };
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("transition-whip"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rp.set_pipeline(&self.pipeline);
+            rp.set_bind_group(0, &bind, &[]);
+            rp.draw(0..3, 0..1);
+        }
+        queue.submit([encoder.finish()]);
+        let validation_error = pollster::block_on(validation_scope.pop());
+        let oom_error = pollster::block_on(oom_scope.pop());
+        if let Some(error) = oom_error.or(validation_error) {
+            return Err(TransitionCatalogError::AllocationFailed { detail: error.to_string() });
+        }
         Ok(())
     }
 }
