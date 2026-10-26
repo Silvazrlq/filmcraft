@@ -110,7 +110,7 @@ fn motion_roll3d_apply(xy: vec2<f32>, extent: vec2<f32>, p: f32, direction: u32,
     let b = motion_roll3d_card(origin_b, ex_b, ey_b, eye, xy, extent, 1u);
     if ha.z <= 0.0 { return b; }
     if hb.z <= 0.0 { return a; }
-    if ha.z > hb.z { return motion_over(b, a); }
+    if ha.z >= hb.z { return motion_over(b, a); }
     return motion_over(a, b);
 }
 fn motion_camera_sample(side: u32, xy: vec2<f32>, zoom: f32, rotation: f32, blur: f32, extent: vec2<u32>) -> vec4<f32> {

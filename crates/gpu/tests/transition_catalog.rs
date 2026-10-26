@@ -280,6 +280,72 @@ fn user_project_transition_kernels_match_cpu_oracle() {
 }
 
 #[test]
+#[ignore = "diagnostic: roll_3d p=0.5 per-texel GPU vs CPU, AMD Vulkan only"]
+fn roll3d_p05_texel_report() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN, ..wgpu::InstanceDescriptor::new_without_display_handle() });
+    let Some(adapter) = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN)).into_iter().find(|adapter| {
+        let info = adapter.get_info();
+        info.backend == wgpu::Backend::Vulkan
+            && info.vendor == 0x1002
+            && matches!(info.device_type, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu)
+    }) else {
+        eprintln!("SKIPPED roll3d report: no physical AMD Vulkan adapter");
+        return;
+    };
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_features: wgpu::Features::FLOAT32_BLENDABLE, ..Default::default() }))
+            .unwrap();
+    let (w, h) = (17u32, 9u32);
+    let format = wgpu::TextureFormat::Rgba32Float;
+    let mut a = Image::new(w as usize, h as usize);
+    let mut b = a.clone();
+    for i in 0..(w * h) as usize {
+        let alpha = (i % 5) as f32 / 4.0;
+        a.px[i * 4..i * 4 + 4].copy_from_slice(&[alpha * 0.7, alpha * 0.2, alpha * 0.1, alpha]);
+        b.px[i * 4..i * 4 + 4].copy_from_slice(&[(1.0 - alpha) * 0.1, (1.0 - alpha) * 0.3, (1.0 - alpha) * 0.8, 1.0 - alpha]);
+    }
+    let inputs = [texture(&device, w, h, format), texture(&device, w, h, format)];
+    for (tex, img) in inputs.iter().zip([&a, &b]) {
+        let bytes: Vec<u8> = img.px.iter().flat_map(|v| v.to_le_bytes()).collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &bytes,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+    }
+    let views = [inputs[0].create_view(&Default::default()), inputs[1].create_view(&Default::default())];
+    let output = texture(&device, w, h, format);
+    let canvas = output.create_view(&Default::default());
+    let stage = TransitionCatalogStage::new(&device, format);
+    let effect = find_effect("roll_3d").unwrap().instance();
+    let planned = evaluate(&effect, 0.5, 0.5).unwrap();
+    let mut clear = device.create_command_encoder(&Default::default());
+    drop(clear.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("roll3d-report-clear"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &canvas,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    }));
+    queue.submit([clear.finish()]);
+    stage.draw(&device, &queue, &canvas, [&views[0], &views[1]], (w, h), &planned).unwrap();
+    let got = read(&device, &queue, &output, w, h, format);
+    let cpu = apply_scaled(&effect, &a, &b, 0.5, 0.5);
+    for (i, (g, c)) in got.chunks(4).zip(cpu.px.chunks(4)).enumerate() {
+        if g.iter().zip(c).any(|(x, y)| (x - y).abs() > 1e-3) {
+            eprintln!("roll3d p=0.5 x={} y={} gpu={:?} cpu={:?}", i % w as usize, i / w as usize, g, c);
+        }
+    }
+}
+
+#[test]
 #[ignore = "AMD Vulkan only: run on the AMD PC with --ignored"]
 fn preview_transition_parameter_ranges_match_cpu_oracle() {
     assert_catalog_parity(&["flare", "blur_dissolve", "dip_to_black", "dip_to_white"], false);
