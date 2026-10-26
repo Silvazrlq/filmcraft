@@ -88,7 +88,9 @@ fn cards_whip_scene(xy: vec2<f32>, p: f32, direction: u32, extent: vec2<f32>) ->
     return b + a * (1.0 - b.a);
 }
 
-fn cards_whip(xy: vec2<f32>, p: f32, direction: u32, blur_percent: f32, extent: vec2<f32>) -> vec4<f32> {
+// Two passes like the CPU shutter: pass 0 renders the scene, pass 1 blurs that scratch
+// image linearly (bilinear taps on `outgoing`, which the caller binds to the scratch).
+fn cards_whip_blur(xy: vec2<f32>, p: f32, direction: u32, blur_percent: f32, extent: vec2<f32>) -> vec4<f32> {
     var delta = vec2(1.0, 0.0);
     switch direction {
         case 0u: { delta = vec2(0.0, 1.0); }
@@ -100,13 +102,13 @@ fn cards_whip(xy: vec2<f32>, p: f32, direction: u32, blur_percent: f32, extent: 
     let bell_t = 4.0 * p * (1.0 - p);
     let bell = bell_t * bell_t * (3.0 - 2.0 * bell_t);
     let len = clamp(blur_percent, 0.0, 100.0) * 0.01 * bell * travel * 0.18;
-    if len < 0.75 { return cards_whip_scene(xy, p, direction, extent); }
+    let extent_u = vec2<u32>(extent);
+    if len < 0.75 { return sample_clamped(0u, xy, extent_u); }
     let count = clamp(u32(ceil(len)), 1u, 40u);
     var sum = vec4(0.0);
     for (var i = 0u; i < count; i++) {
         let t = f32(i) / f32(max(count - 1u, 1u)) * 2.0 - 1.0;
-        let at = clamp(xy + delta * len * t, vec2(0.5), extent - vec2(0.5));
-        sum += cards_whip_scene(at, p, direction, extent);
+        sum += sample_clamped(0u, xy + delta * len * t, extent_u);
     }
     return sum / f32(count);
 }
@@ -114,7 +116,8 @@ fn cards_whip(xy: vec2<f32>, p: f32, direction: u32, blur_percent: f32, extent: 
 fn cards_apply(position: vec4<f32>) -> vec4<f32> {
     let extent = vec2<f32>(textureDimensions(outgoing));
     if params.kernel == 95u {
-        return cards_whip(position.xy, params.progress, params.direction, params.extra0.x, extent);
+        if params.extra1.x > 0.5 { return cards_whip_blur(position.xy, params.progress, params.direction, params.extra0.x, extent); }
+        return cards_whip_scene(position.xy, params.progress, params.direction, extent);
     }
     if params.kernel != 94u { return vec4(0.0); }
     return cards_page_peel(position.xy, params.progress, params.direction, params.extra0.x, params.extra0.y > 0.5, extent);
