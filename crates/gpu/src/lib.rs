@@ -171,6 +171,10 @@ pub const TRANSITION_AMD_PARITY: &[&str] = &[
     "spin_3d",
     "vr_mobius_zoom",
     "text_animator",
+    "film_roll",
+    "whip",
+    "clock_wipe_legacy",
+    "radial_wipe_legacy",
 ];
 
 /// Effects with recorded CPU parity on the AMD adapter (22/10/2026, 0.10): every case of
