@@ -83,6 +83,14 @@ fn spin_3d_apply(position: vec4<f32>) -> vec4<f32> {
     return flip_motion_card_sample(position.xy, vec2<f32>(textureDimensions(outgoing)), p, false);
 }
 
+// floor((u / span) * n) checked with exact multiplies: AMD's f32 division can push a band-edge pixel into the neighbouring slice, which CPU does not
+fn slice_band_index(u: f32, span: f32, n: f32) -> f32 {
+    var i = floor(u / span * n);
+    if (i + 1.0) * span <= u * n { i += 1.0; }
+    if i * span > u * n { i -= 1.0; }
+    return clamp(i, 0.0, n - 1.0);
+}
+
 fn slice_apply(position: vec4<f32>) -> vec4<f32> {
     let extent_u = textureDimensions(outgoing);
     let extent = vec2<f32>(extent_u);
@@ -103,7 +111,7 @@ fn slice_apply(position: vec4<f32>) -> vec4<f32> {
         var q = p;
         if count > 1u { q = clamp(p + (f32(sample_i) / f32(count - 1u) - 0.5) * (0.08 * motion_blur), 0.0, 1.0); }
         let xy = position.xy;
-        let i = clamp(floor((dot(xy, across_axis) - lo) / span * slices), 0.0, slices - 1.0);
+        let i = slice_band_index(dot(xy, across_axis) - lo, span, slices);
         let sign = select(-1.0, 1.0, i32(i) % 2 == 0);
         let qi = clamp((q - 0.3 * i / max(slices, 1.0)) / 0.7, 0.0, 1.0);
         let off = sign * distance * qi * qi * qi;
@@ -112,7 +120,7 @@ fn slice_apply(position: vec4<f32>) -> vec4<f32> {
         let b = sample_clamped(1u, (xy - extent * 0.5) / zoom + extent * 0.5, extent_u);
         var color = b;
         if all(source_a >= vec2(0.0)) && all(source_a < extent) {
-            let j = clamp(floor((dot(source_a, across_axis) - lo) / span * slices), 0.0, slices - 1.0);
+            let j = slice_band_index(dot(source_a, across_axis) - lo, span, slices);
             if j == i {
                 color = motion_over(sample_clamped(0u, source_a, extent_u), b);
             }
