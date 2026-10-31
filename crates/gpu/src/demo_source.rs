@@ -73,6 +73,7 @@ impl DemoSource {
         Ok(bytes)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     pub fn record<H>(
         &self,
         device: &wgpu::Device,
@@ -197,7 +198,8 @@ mod tests {
                     let gpu: Vec<u8> = data.chunks_exact(row as usize).flat_map(|line| line[..(w * 4) as usize].iter().copied()).collect();
                     drop(data);
                     buffer.unmap();
-                    let cpu = filmcraft_media::generators::render(&Generator::Demo(scene), w, h, time, 0, filmcraft_time::FrameRate::FPS_24);
+                    let cpu = filmcraft_media::generators::render(&Generator::Demo(scene), w, h, time, 0, filmcraft_time::FrameRate::FPS_24)
+                        .expect("CPU demo scene renders");
                     let (index, worst) = gpu.iter().zip(&cpu).enumerate().map(|(i, (a, b))| (i, a.abs_diff(*b))).max_by_key(|(_, d)| *d).unwrap();
                     let pixel = index / 4 * 4;
                     assert!(

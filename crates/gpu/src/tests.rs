@@ -116,7 +116,8 @@ fn gpu_matches_cpu_plan() {
         1.0,
         24,
         filmcraft_time::FrameRate::FPS_24,
-    );
+    )
+    .unwrap();
     let rgba = Arc::new(VideoFrame::rgba8(320, 180, pixels));
     let (w, h) = (320usize, 180usize);
     let plan = FramePlan::Layers {
@@ -464,7 +465,8 @@ fn gpu_draws_yuv_alpha_plane_like_the_cpu() {
         1.0,
         24,
         filmcraft_time::FrameRate::FPS_24,
-    );
+    )
+    .unwrap();
     let background = Arc::new(VideoFrame::rgba8(320, 180, pixels));
     for bits in [8, 10, 12] {
         let mut c = GpuCompositor::new(&dev, &q);
@@ -569,7 +571,7 @@ fn required_preview_resolves_srgb_and_renders_verified_transitions() {
     let media = project.add_item(
         "fixture",
         Label::Iris,
-        ItemKind::Media(MediaClip {
+        ItemKind::Media(Box::new(MediaClip {
             media: MediaRef::File { path: "preview-test-fixture.mov".into() },
             info: source.info().clone(),
             interpret: Default::default(),
@@ -579,7 +581,7 @@ fn required_preview_resolves_srgb_and_renders_verified_transitions() {
             offline: false,
             proxy: None,
             identity: None,
-        }),
+        })),
         None,
     );
     let seq = project.new_sequence("preview", SequenceSettings { width: 8, height: 8, frame_rate: FrameRate::FPS_24, ..Default::default() }, 1, 0, None);
@@ -635,7 +637,7 @@ fn demo_preview_is_generated_on_the_gpu_and_shown() {
     let media = project.add_item(
         "Aurora",
         Label::Iris,
-        ItemKind::Media(MediaClip {
+        ItemKind::Media(Box::new(MediaClip {
             media: MediaRef::Generator(Generator::Demo(scene)),
             info: source.info().clone(),
             interpret: Default::default(),
@@ -645,7 +647,7 @@ fn demo_preview_is_generated_on_the_gpu_and_shown() {
             offline: false,
             proxy: None,
             identity: None,
-        }),
+        })),
         None,
     );
     let seq = project.new_sequence("preview", SequenceSettings { width: 320, height: 180, frame_rate: FrameRate::FPS_24, ..Default::default() }, 1, 0, None);

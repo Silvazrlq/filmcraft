@@ -72,8 +72,8 @@ use crate::mxf_out::{MxfMux, MxfSetup};
 use crate::pipeline::Pipeline;
 use crate::settings::{AudioCodec, BitrateMode};
 use crate::{
-    AudioEncoder, ColorSignal, EncodedPacket, EncoderFrame, ExportError, ExportSettings, Format, H264Pass, Out, Progress, Report, ResidentReservation,
-    ResidentVideoSession, Result, Stage, VideoEncoder, audio_factories, export_range, frame_span, note_stage, timed, video_factories,
+    AudioEncoder, ColorSignal, EncodedPacket, EncoderFrame, ExportError, ExportSettings, Format, H264Pass, Out, PrepareAhead, Progress, Report,
+    ResidentReservation, ResidentVideoSession, Result, Stage, VideoEncoder, audio_factories, export_range, frame_span, note_stage, timed, video_factories,
 };
 
 /// Output frames per interleaved group: the video packets of these frames, then the audio up to
@@ -175,7 +175,9 @@ impl VideoPath {
 /// Render frames `f..end` in parallel. `None` when a source was not ready for one of them (the
 /// pending flag, taken after every frame because it is per thread): the batch is incomplete and
 /// must be rendered again.
-fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider) -> Result<Option<Vec<Frame>>> {
+/// `prepare` (the encoder's [`VideoEncoder::prepare_ahead`]) then works on each frame, numbered
+/// from `f0` like [`EncoderFrame::index`].
+fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider, prepare: Option<&PrepareAhead>, f0: i64) -> Result<Option<Vec<Frame>>> {
     let pending = AtomicBool::new(false);
     let frames: Result<Vec<Frame>> = (f..end)
         .into_par_iter()
@@ -183,6 +185,10 @@ fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider)
             let frame = pipe.frame(fi, sources)?;
             if filmcraft_media::pending::take() {
                 pending.store(true, Ordering::Relaxed);
+            }
+            if let Some(prepare) = prepare {
+                let index = u64::try_from(fi - f0).unwrap_or(u64::MAX);
+                prepare(&EncoderFrame { width: pipe.w, height: pipe.h, rgba: &frame.0, hdr: pipe.hdr_out.then_some(frame.1.as_slice()), index });
             }
             Ok(frame)
         })
@@ -647,6 +653,11 @@ impl Exporter {
         if matches!(&self.video, VideoPath::Resident { .. }) {
             return self.step_resident(sources, progress);
         }
+        let prepare = match &self.video {
+            VideoPath::Cpu { encoder, .. } => encoder.prepare_ahead(),
+            VideoPath::Resident { .. } => None,
+        };
+        let f0 = self.f0;
         let (f, frames) = match self.ahead.take() {
             Some(a) if a.first == self.next => (a.first, a.frames),
             _ => {
@@ -654,7 +665,7 @@ impl Exporter {
                 let VideoPath::Cpu { pipe, .. } = &self.video else {
                     return Err(ExportError::Encode("internal: CPU pipeline unavailable".into()));
                 };
-                match timed(Stage::Render, || render_batch(pipe, f, end, sources))? {
+                match timed(Stage::Render, || render_batch(pipe, f, end, sources, prepare.as_ref(), f0))? {
                     Some(frames) => (f, frames),
                     None => return Ok(Step::Pending),
                 }
@@ -685,7 +696,7 @@ impl Exporter {
         let mut encode_done: Option<web_time::Instant> = None;
         let encoded = rayon::in_place_scope(|s| {
             s.spawn(|_| {
-                slot = Some(catch_unwind(AssertUnwindSafe(|| timed(Stage::Render, || render_batch(&pipe, a, b, sources)))));
+                slot = Some(catch_unwind(AssertUnwindSafe(|| timed(Stage::Render, || render_batch(&pipe, a, b, sources, prepare.as_ref(), f0)))));
             });
             let r = self.encode_batch(f, frames, sources);
             encode_done = Some(web_time::Instant::now());

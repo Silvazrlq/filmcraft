@@ -36,6 +36,7 @@ impl FlareStage {
         Self { pipeline }
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     pub(crate) fn draw(
         &self,
         device: &wgpu::Device,

@@ -190,6 +190,7 @@ impl Nv12Repack {
     /// Repack one imported object into padded NV12 and record copies to R8/RG8 textures.
     /// `visible_size` is the output crop; source dimensions are coded surface dimensions. Takes
     /// one allocation hold before creating uniform, storage, or texture buffers.
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     pub fn record<B: Nv12AllocationBudget>(
         &self,
         device: &wgpu::Device,

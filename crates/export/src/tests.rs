@@ -15,7 +15,7 @@ pub(crate) fn project() -> (Arc<Project>, ItemId, SourceMap) {
         p.add_item(
             &info.name.clone(),
             Label::Iris,
-            ItemKind::Media(MediaClip {
+            ItemKind::Media(Box::new(MediaClip {
                 media: MediaRef::Generator(g.generator.clone()),
                 info,
                 interpret: Default::default(),
@@ -25,7 +25,7 @@ pub(crate) fn project() -> (Arc<Project>, ItemId, SourceMap) {
                 offline: false,
                 proxy: None,
                 identity: None,
-            }),
+            })),
             None,
         )
     };
@@ -231,7 +231,7 @@ fn caption_burn_in_h264_ffmpeg_oracle() {
     let matte = p.add_item(
         "matte",
         Label::Iris,
-        ItemKind::Media(MediaClip {
+        ItemKind::Media(Box::new(MediaClip {
             media: MediaRef::Generator(g.generator.clone()),
             info,
             interpret: Default::default(),
@@ -241,7 +241,7 @@ fn caption_burn_in_h264_ffmpeg_oracle() {
             offline: false,
             proxy: None,
             identity: None,
-        }),
+        })),
         None,
     );
     let r = FrameRate::FPS_24;
@@ -397,6 +397,48 @@ fn auto_export_fails_before_work_and_off_remains_available() {
     export(&p, seq, &off, &sources, &Progress::default()).unwrap();
     assert!(std::path::Path::new(&off_path.replace(".png", "000.png")).exists(), "Off CPU reference export must remain available");
     assert_eq!(FACTORIES.load(Ordering::SeqCst), 0, "Off must not invoke GPU renderer factory");
+    crate::reset_frame_renderers_for_tests();
+}
+
+#[test]
+fn hostile_frame_sizes_do_not_panic_with_renderer_attached() {
+    crate::reset_frame_renderers_for_tests();
+    crate::register_frame_renderer(|| None);
+    for (w, h) in [(1, 1), (17, 13), (4096, 1)] {
+        let mut p = Project::new("x");
+        let g = GeneratorSource::new(Generator::ColorMatte { color: [0.5, 0.5, 0.5, 1.0] }, 320, 180, FrameRate::FPS_24, Tick(2 * TICKS_PER_SECOND));
+        let info = g.info().clone();
+        let red = p.add_item(
+            &info.name.clone(),
+            Label::Iris,
+            ItemKind::Media(Box::new(MediaClip {
+                media: MediaRef::Generator(g.generator.clone()),
+                info,
+                interpret: Default::default(),
+                mark_in: None,
+                mark_out: None,
+                markers: vec![],
+                offline: false,
+                proxy: None,
+                identity: None,
+            })),
+            None,
+        );
+        let seq = p.new_sequence("s", SequenceSettings { width: w, height: h, frame_rate: FrameRate::FPS_24, ..Default::default() }, 1, 1, None);
+        let v = p.make_track_item(red, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, FrameRate::FPS_24.tick_of(2)), FrameRate::FPS_24).unwrap();
+        p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
+        let mut m = SourceMap::default();
+        m.0.insert(red, Arc::new(g));
+        let mut s = ExportSettings { format: Format::PngSequence, path: tmp("hostile.png"), ..Default::default() };
+        s.range = Some(TimeRange::new(Tick::ZERO, FrameRate::FPS_24.tick_of(1)));
+        s.gpu_rendering = crate::GpuRendering::Auto;
+        let r = export(&Arc::new(p), seq, &s, &m, &Progress::default());
+        if r.is_err() {
+            continue; // sizes the exporter rejects are fine too — as long as nothing panics
+        }
+        let bytes = std::fs::read(tmp("hostile000.png")).unwrap_or_default();
+        assert!(!bytes.is_empty(), "{w}x{h}: PNG written");
+    }
     crate::reset_frame_renderers_for_tests();
 }
 
@@ -596,7 +638,7 @@ fn amd_required_frame_uses_resident_session_without_cpu_source_lookup() {
         }
     }
 
-    let _guard = crate::resident_reservation_tests::lock_ledger();
+    let _guard = crate::resident::resident_reservation_tests::lock_ledger();
     let (project, seq, _) = project();
     let mut project = (*project).clone();
     let video_item = project.sequence(seq).unwrap().video_tracks[0].items[0].item;
@@ -637,4 +679,46 @@ fn required_frames_are_refused_by_renderers_without_a_strict_path() {
     let (p, seq, sources) = project();
     let err = NoStrictPath.render_required(&p, seq, filmcraft_time::Tick::ZERO, filmcraft_render::RenderOptions::default(), &sources);
     assert!(err.is_err(), "a required frame must never come from the CPU");
+}
+
+/// The render threads may convert H.264 input ahead ([`VideoEncoder::prepare_ahead`]): the packets
+/// are the same whether a picture was converted ahead (in any order), converted by the encoder
+/// itself (none ahead, or one ahead for another picture size), or never asked for.
+#[test]
+fn h264_input_converted_ahead_encodes_to_the_same_packets() {
+    let (w, h) = (96u32, 64u32);
+    let frames: Vec<Vec<u8>> = (0..8u32)
+        .map(|t| {
+            (0..w * h)
+                .flat_map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    [(x * 3 + t * 7) as u8, (y * 5 + t) as u8, ((x + y) * 2 + t * 3) as u8, 255]
+                })
+                .collect()
+        })
+        .collect();
+    let s = ExportSettings { format: Format::H264, ..Default::default() };
+    let frame = |i: usize| EncoderFrame { width: w, height: h, rgba: &frames[i], hdr: None, index: i as u64 };
+    let encode_all = |ahead: bool| -> Vec<Vec<u8>> {
+        let mut enc = h264_factory(Format::H264, w, h, FrameRate::FPS_24, &s).unwrap().unwrap();
+        if ahead {
+            let prepare = enc.prepare_ahead().expect("the H.264 encoder converts ahead");
+            for i in (0..frames.len()).rev().filter(|&i| i != 3) {
+                prepare(&frame(i));
+            }
+            // a picture of another size under index 5: the encoder converts that one itself
+            prepare(&EncoderFrame { width: w / 2, height: h / 2, rgba: &frames[5][..(w * h) as usize], hdr: None, index: 5 });
+            // and one it is never asked to encode
+            prepare(&EncoderFrame { index: 99, ..frame(0) });
+        }
+        let mut out = Vec::new();
+        for i in 0..frames.len() {
+            out.extend(enc.encode(&frame(i)).unwrap().into_iter().map(|p| p.data));
+        }
+        out.extend(enc.flush().unwrap().into_iter().map(|p| p.data));
+        out
+    };
+    let plain = encode_all(false);
+    assert!(!plain.is_empty());
+    assert!(plain == encode_all(true), "converting ahead changed the packets");
 }

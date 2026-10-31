@@ -207,72 +207,32 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
     {
         settings.format = Format::from_name(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}`")))?;
     }
-    if let Some(patch) = p.get("settings").filter(|v| v.is_object()) {
-        let mut v = serde_json::to_value(&settings).map_err(|e| EngineError::Other(e.to_string()))?;
-        merge(&mut v, patch);
-        settings = serde_json::from_value(v).map_err(|e| bad(cmd, format!("settings: {e}")))?;
-        // serde ignores keys it doesn't know, so a misspelt or misplaced key (a flat parameter
-        // such as `loudnessLufs` put inside `settings`) would silently do nothing.
-        let known = serde_json::to_value(&settings).map_err(|e| EngineError::Other(e.to_string()))?;
-        if let Some(path) = unknown_key(&known, patch, "") {
-            return Err(bad(cmd, format!("settings: unknown key `{path}` (see export.presets.get for the settings' keys)")));
-        }
+    apply_nested_settings(&mut settings, p, cmd)?;
+    apply_flat_overrides(&mut settings, p, cmd)?;
+    settings.validate().map_err(|e| bad(cmd, e.to_string()))?;
+    Ok((preset, settings))
+}
+
+fn apply_nested_settings(settings: &mut ExportSettings, params: &Value, cmd: &str) -> Result<()> {
+    let Some(patch) = params.get("settings").filter(|value| value.is_object()) else { return Ok(()) };
+    let mut value = serde_json::to_value(&*settings).map_err(|error| EngineError::Other(error.to_string()))?;
+    merge(&mut value, patch);
+    *settings = serde_json::from_value(value).map_err(|error| bad(cmd, format!("settings: {error}")))?;
+    // serde ignores unknown keys; detect misspelled or misplaced settings before returning.
+    let known = serde_json::to_value(&*settings).map_err(|error| EngineError::Other(error.to_string()))?;
+    if let Some(path) = unknown_key(&known, patch, "") {
+        return Err(bad(cmd, format!("settings: unknown key `{path}` (see export.presets.get for the settings' keys)")));
     }
-    // flat overrides (the original file.exportMedia parameters and a few common ones)
-    if let Some(f) = str_p(p, "format") {
-        settings.format = Format::from_name(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}`")))?;
-    }
-    if let Some(v) = f64_p(p, "scale") {
-        settings.scale = v as f32;
-    }
-    if let Some(v) = bool_p(p, "audio") {
-        settings.include_audio = v;
-    }
-    if let Some(v) = u64_p(p, "quality") {
-        settings.quality = v.min(100) as u8;
-    }
-    if let Some(v) = crate::commands::checked_u32_p(p, "bitrateKbps", cmd)? {
-        settings.bitrate_kbps = v;
-        settings.adaptive_bitrate = None;
-    }
-    if let Some(v) = crate::commands::checked_u32_p(p, "maxBitrateKbps", cmd)? {
-        settings.max_bitrate_kbps = Some(v);
-    }
-    if let Some(v) = str_p(p, "bitrateMode") {
-        settings.bitrate_mode = serde_json::from_value(json!(v)).map_err(|_| bad(cmd, "bitrateMode: cbr | vbr1Pass | vbr2Pass | crf"))?;
-    }
-    if let Some(v) = f64_p(p, "crf") {
-        settings.crf = v as f32;
-        if p.get("bitrateMode").is_none() {
-            settings.bitrate_mode = BitrateMode::Crf;
-        }
-    }
-    if let Some(v) = crate::commands::checked_u32_p(p, "keyframeDistance", cmd)? {
-        settings.keyframe_distance = Some(v);
-    }
+    Ok(())
+}
+
+/// The hardware-encoder and GPU-render flags, each normalized on its own (see `apply_flat_overrides`).
+fn apply_hardware_flags(settings: &mut ExportSettings, p: &Value, cmd: &str) -> Result<()> {
     if let Some(v) = p.get("hardwareEncoding") {
-        settings.hardware_encoding = match v {
-            Value::Bool(on) => {
-                if *on {
-                    HardwareEncoding::Auto
-                } else {
-                    HardwareEncoding::Off
-                }
-            }
-            other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "hardwareEncoding: off | auto | gpuRequired | amdRequired | nvencRequired"))?,
-        };
+        settings.hardware_encoding = parse_hardware_encoding(v, cmd)?;
     }
     if let Some(v) = p.get("gpuRendering") {
-        settings.gpu_rendering = match v {
-            Value::Bool(on) => {
-                if *on {
-                    GpuRendering::Auto
-                } else {
-                    GpuRendering::Off
-                }
-            }
-            other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "gpuRendering: off | auto | amdRequired"))?,
-        };
+        settings.gpu_rendering = parse_gpu_rendering(v, cmd)?;
     }
     if settings.hardware_encoding == HardwareEncoding::NvencRequired {
         if settings.gpu_rendering != GpuRendering::Off {
@@ -292,6 +252,47 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
         // fallback Auto. Each field is normalized on its own, so an explicit `gpuRendering: off` is kept.
         settings.hardware_encoding = HardwareEncoding::GpuRequired;
     }
+    Ok(())
+}
+
+/// Apply the legacy flat export parameters after preset and nested settings have been resolved.
+fn apply_flat_overrides(settings: &mut ExportSettings, p: &Value, cmd: &str) -> Result<()> {
+    // flat overrides (the original file.exportMedia parameters and a few common ones)
+    if let Some(f) = str_p(p, "format") {
+        settings.format = Format::from_name(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}`")))?;
+    }
+    if let Some(v) = f64_p(p, "scale") {
+        settings.scale = v as f32;
+    }
+    if let Some(v) = bool_p(p, "audio") {
+        settings.include_audio = v;
+    }
+    if let Some(v) = u64_p(p, "quality") {
+        settings.quality = v.min(100) as u8;
+    }
+    if let Some(v) = crate::commands::checked_u32_p(p, "bitrateKbps", cmd)? {
+        settings.bitrate_kbps = v;
+        settings.adaptive_bitrate = None;
+    }
+    if let Some(v) = crate::commands::checked_u32_p(p, "maxThreads", cmd)? {
+        settings.max_threads = v;
+    }
+    if let Some(v) = crate::commands::checked_u32_p(p, "maxBitrateKbps", cmd)? {
+        settings.max_bitrate_kbps = Some(v);
+    }
+    if let Some(v) = str_p(p, "bitrateMode") {
+        settings.bitrate_mode = serde_json::from_value(json!(v)).map_err(|_| bad(cmd, "bitrateMode: cbr | vbr1Pass | vbr2Pass | crf"))?;
+    }
+    if let Some(v) = f64_p(p, "crf") {
+        settings.crf = v as f32;
+        if p.get("bitrateMode").is_none() {
+            settings.bitrate_mode = BitrateMode::Crf;
+        }
+    }
+    if let Some(v) = crate::commands::checked_u32_p(p, "keyframeDistance", cmd)? {
+        settings.keyframe_distance = Some(v);
+    }
+    apply_hardware_flags(settings, p, cmd)?;
     if let Some(v) = bool_p(p, "burnCaptions") {
         settings.burn_captions = v;
     }
@@ -337,8 +338,23 @@ pub fn settings_from_params(s: &Session, p: &Value, cmd: &str) -> Result<(Option
         settings.effects.loudness.enabled = true;
         settings.effects.loudness.target_lufs = v;
     }
-    settings.validate().map_err(|e| bad(cmd, e.to_string()))?;
-    Ok((preset, settings))
+    Ok(())
+}
+
+fn parse_hardware_encoding(value: &Value, cmd: &str) -> Result<HardwareEncoding> {
+    match value {
+        Value::Bool(true) => Ok(HardwareEncoding::Auto),
+        Value::Bool(false) => Ok(HardwareEncoding::Off),
+        other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "hardwareEncoding: off | auto | gpuRequired | amdRequired | nvencRequired")),
+    }
+}
+
+fn parse_gpu_rendering(value: &Value, cmd: &str) -> Result<GpuRendering> {
+    match value {
+        Value::Bool(true) => Ok(GpuRendering::Auto),
+        Value::Bool(false) => Ok(GpuRendering::Off),
+        other => serde_json::from_value(other.clone()).map_err(|_| bad(cmd, "gpuRendering: off | auto | amdRequired")),
+    }
 }
 
 /// The sequence an export command targets (`sequence` param, else the active one).

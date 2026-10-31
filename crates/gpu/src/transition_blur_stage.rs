@@ -116,6 +116,7 @@ impl TransitionBlurStage {
         })
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     fn box_pass(
         &mut self,
         device: &wgpu::Device,
@@ -147,6 +148,7 @@ impl TransitionBlurStage {
         output
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     fn mix_pass(
         &mut self,
         device: &wgpu::Device,
@@ -211,6 +213,7 @@ impl TransitionBlurStage {
         output
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     fn blur_chain(
         &mut self,
         device: &wgpu::Device,

@@ -542,26 +542,34 @@ impl SpatialOp {
         (op, i, p)
     }
 
-    pub fn apply(&self, img: &mut Image) {
-        if img.w == 0 || img.h == 0 {
-            return;
-        }
+    /// The whole-image equirectangular and projection routes; true when this op took one of them.
+    fn apply_vr(&self, img: &mut Image) -> bool {
         if let Self::VrChromatic { aberration, center, falloff, inverse, layout } = self {
             *img = spatial_vr_chromatic(img, *aberration, *center, *falloff, *inverse, *layout);
-            return;
+            return true;
         }
         if let Self::VrColorGradients { points, colors, blend, opacity, mode, layout } = self {
             *img = spatial_vr_color_gradients(img, *points, *colors, *blend, *opacity, *mode, *layout);
-            return;
+            return true;
         }
         if let Self::VrProjection { matrix, kx, ky, layout, identity, .. } = self {
             if !identity {
                 *img = spatial_vr_projection(img, *matrix, *kx, *ky, *layout);
             }
-            return;
+            return true;
         }
         if let Self::VrPlaneToSphere { matrix, tx, feather, layout } = self {
             *img = spatial_vr_plane_to_sphere(img, *matrix, *tx, *feather, *layout);
+            return true;
+        }
+        false
+    }
+
+    pub fn apply(&self, img: &mut Image) {
+        if img.w == 0 || img.h == 0 {
+            return;
+        }
+        if self.apply_vr(img) {
             return;
         }
         let src = img.clone();

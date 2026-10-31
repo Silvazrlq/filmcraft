@@ -48,6 +48,7 @@ pub struct DmaBufLayout {
 
 impl DmaBufLayout {
     /// Validate two separately exported NV12 planes against the queried format/modifier intersection.
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
     pub fn validate(
         expected_node: DrmNodeId,
         node: DrmNodeId,

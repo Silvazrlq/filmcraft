@@ -13,6 +13,7 @@ fn hevc_factory_never_changes_the_requested_codec() {
 
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[expect(clippy::cognitive_complexity, reason = "one VA-API export case: setup, encode, decode and comparison in sequence")]
 fn hardware_case(width: u32, height: u32, frames: u64, keyint: u32, name: &str, mode: BitrateMode) {
     let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if filmcraft_platform::vaapi::va::hevc_encode_caps().is_err() {

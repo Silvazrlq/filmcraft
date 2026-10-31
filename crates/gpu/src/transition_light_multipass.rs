@@ -89,6 +89,7 @@ impl TransitionLightMultipassStage {
         view
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     fn params(device: &wgpu::Device, size: (u32, u32), kernel: u32, radius: u32, axis: u32, p: f32, f0: [f32; 3], f1: [f32; 4]) -> wgpu::Buffer {
         let mut words = [0u32; 20];
         words[0] = size.0;
@@ -137,6 +138,7 @@ impl TransitionLightMultipassStage {
         pass.dispatch_workgroups(groups.0, groups.1, 1);
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     fn run_box(
         &mut self,
         device: &wgpu::Device,
@@ -161,6 +163,7 @@ impl TransitionLightMultipassStage {
         (dest, dest_slot)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     fn blur(
         &mut self,
         device: &wgpu::Device,

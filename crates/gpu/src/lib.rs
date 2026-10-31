@@ -1696,7 +1696,7 @@ impl GpuCompositor {
                         views[index] = view;
                     }
                     match effect.effect.as_str() {
-                        "push" => self.transition.draw(&self.device, &self.queue, &canvas, [&views[0], &views[1]], dims, effect, *progress),
+                        "push" => self.transition.draw((&self.device, &self.queue), &canvas, [&views[0], &views[1]], dims, effect, *progress),
                         "flare" => self.flare_transition.draw(&self.device, &self.queue, &canvas, [&views[0], &views[1]], dims, effect, *progress),
                         "blur_dissolve" => {
                             if let Some(stage) = self.blur_transition.as_mut() {

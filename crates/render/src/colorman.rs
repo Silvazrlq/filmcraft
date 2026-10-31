@@ -160,7 +160,7 @@ mod tests {
                 proxy: None,
                 identity: None,
             };
-            let id = p.add_item("hdr", Label::Iris, ItemKind::Media(clip), None);
+            let id = p.add_item("hdr", Label::Iris, ItemKind::Media(Box::new(clip)), None);
             (p, id)
         };
         let out = |hdr: Option<HdrMetadata>, nits: f32| {

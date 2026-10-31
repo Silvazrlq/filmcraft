@@ -174,6 +174,7 @@ fn shape_distance(shape: u32, x: f32, y: f32) -> f32 {
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
 fn shape_dissolve_field(shape: u32, size: f32, rotation: f32, order: u32, seed: u32, cols: f32, rows: f32, diag: f32, x: f32, y: f32) -> f32 {
     let (cx, cy) = ((x / size).floor(), (y / size).floor());
     let (lx, ly) = (x - (cx + 0.5) * size, y - (cy + 0.5) * size);

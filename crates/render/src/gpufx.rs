@@ -690,7 +690,7 @@ fn resample(w: usize, h: usize, m: &Affine, opacity: f32) -> Resample {
     Resample { inv: Some(inv), rect: [x0 as u32, x1 as u32, y0.min(y1) as u32, y1 as u32], opacity }
 }
 
-fn cineon_value(v: f32, mode: u32, black: f32, white: f32, ib: f32, iw: f32, gamma: f32, roll: f32) -> f32 {
+fn cineon_value(v: f32, mode: u32, (black, white): (f32, f32), (ib, iw): (f32, f32), gamma: f32, roll: f32) -> f32 {
     let k = 0.002 / 0.6;
     let offset = 10f32.powf((black - white) * k);
     match mode {
@@ -1412,7 +1412,7 @@ impl FxOp {
                 });
             }
             FxOp::Cineon { mode, black, white, ib, iw, gamma, roll } => {
-                img.map_rgb(|c, _, _| dec(enc(c).map(|v| cineon_value(v, *mode, *black, *white, *ib, *iw, *gamma, *roll))));
+                img.map_rgb(|c, _, _| dec(enc(c).map(|v| cineon_value(v, *mode, (*black, *white), (*ib, *iw), *gamma, *roll))));
             }
             FxOp::Noise { amount, grain, seed, colored, clip } => {
                 if *amount <= 0.0 {

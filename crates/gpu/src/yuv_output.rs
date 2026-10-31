@@ -116,6 +116,7 @@ impl Nv12Output {
     }
 
     /// Encode conversion and edge replication for a visible picture in a coded-size NV12 buffer.
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     pub fn record_coded(
         &self,
         device: &wgpu::Device,

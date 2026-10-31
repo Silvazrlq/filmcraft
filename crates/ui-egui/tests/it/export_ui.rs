@@ -271,7 +271,7 @@ fn cpu_export_checkbox_picks_the_export_route() {
     d.ok("ui.set", json!({"mode": "export"}));
     d.frames(4);
     assert!(d.has("export.video.encoder"), "CPU checkbox");
-    assert!(!d.has("export.video.hardwareEncoding"), "the old hardware id is gone");
+    assert!(d.has("export.video.hardwareEncoding"), "the upstream hardware checkbox stays, on = the GPU route");
     // (gpu, hardware encoding) that the export params carry
     let route = |d: &mut Driver| {
         let s: ExportSettings = serde_json::from_value(export_params(d.app())["settings"].clone()).unwrap();

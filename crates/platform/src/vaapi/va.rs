@@ -1576,6 +1576,7 @@ impl EncodeSession {
         Ok(session)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
     fn with_entrypoint(
         profile: ffi::VAProfile,
         entrypoint: ffi::VAEntrypoint,
@@ -1969,6 +1970,7 @@ pub fn probe() -> &'static Result<String, String> {
     PROBE.get_or_init(|| shared().map(|d| d.vendor().to_string()))
 }
 
+#[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
 pub(crate) fn validate_video_probe(
     request: filmcraft_export::Format,
     expected: DrmNodeId,

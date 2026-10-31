@@ -130,6 +130,7 @@ impl BlurDissolveStage {
         dest
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     fn box_pass(
         &mut self,
         device: &wgpu::Device,
@@ -178,6 +179,7 @@ impl BlurDissolveStage {
         view
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     pub(crate) fn draw(
         &mut self,
         device: &wgpu::Device,

@@ -474,6 +474,7 @@ impl ExportRenderer {
     }
 
     /// CPU-source NV12 export remains unsupported; strict resident export accepts GPU bindings.
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU binding or uniform of this pass")]
     pub fn render_nv12_buffer_coded(
         &mut self,
         project: &Project,
@@ -619,7 +620,7 @@ mod tests {
             p.add_item(
                 &info.name.clone(),
                 Label::Iris,
-                ItemKind::Media(MediaClip {
+                ItemKind::Media(Box::new(MediaClip {
                     media: MediaRef::Generator(g.generator.clone()),
                     info,
                     interpret: Default::default(),
@@ -629,7 +630,7 @@ mod tests {
                     offline: false,
                     proxy: None,
                     identity: None,
-                }),
+                })),
                 None,
             )
         };

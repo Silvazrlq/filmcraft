@@ -278,6 +278,7 @@ impl ResidentNv12Buffer {
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
 fn validate_linear_nv12_layout(
     object_count: Option<usize>,
     object_size: u64,
@@ -570,6 +571,7 @@ pub fn import_va_nv12_surface(
     import_va_nv12_surface_with_allocation(adapter, device, queue, source, reservation, timeout, 0, None)
 }
 
+#[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
 fn import_va_nv12_surface_with_allocation(
     adapter: &Adapter,
     device: &Device,
@@ -719,6 +721,7 @@ pub fn import_and_repack_va_nv12_frame(
     import_and_repack_inner(adapter, device, queue, repacker, frame, reservation, timeout, None)
 }
 
+#[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
 pub(crate) fn import_and_repack_va_nv12_frame_with_dpb(
     adapter: &Adapter,
     device: &Device,
@@ -732,6 +735,7 @@ pub(crate) fn import_and_repack_va_nv12_frame_with_dpb(
     import_and_repack_inner(adapter, device, queue, repacker, frame, reservation, timeout, Some(source_allocation))
 }
 
+#[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
 fn import_and_repack_inner(
     adapter: &Adapter,
     device: &Device,

@@ -515,6 +515,7 @@ impl VaH264Encoder {
     /// picture ([`Self::coded_size`], edges replicated by the producer), `queue` must also contain
     /// the producer submission, and this awaits the exact VA-surface copy submission before the
     /// encode begins. A failed or timed-out copy quarantines the session.
+    #[expect(clippy::too_many_arguments, reason = "one argument per GPU, driver or ABI binding of this function")]
     pub fn encode_gpu_nv12(
         &mut self,
         adapter: &wgpu::Adapter,
