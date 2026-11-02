@@ -204,6 +204,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
         });
         #[cfg(target_os = "linux")]
         let amd_provider_enabled = graphics.mode() == graphics::Mode::Default;
+        let gpu_route_enabled = graphics.mode() == graphics::Mode::Default;
         let confirmed = AtomicBool::new(false);
         cc.egui_ctx.on_end_pass(
             "graphics-start",
@@ -214,9 +215,12 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             }),
         );
         let mut session = Session::default();
-        match filmcraft_gpu::ExportRenderer::new_required() {
-            Ok(_) => session.previews.set_gpu_route(Some(std::sync::Arc::new(GpuPreviewRoute))),
-            Err(e) => log::error!("GPU preview route unavailable: {e}"),
+        // Fallback graphics modes skip the GPU route: its device would load the failed driver.
+        if gpu_route_enabled {
+            match filmcraft_gpu::ExportRenderer::new_required() {
+                Ok(_) => session.previews.set_gpu_route(Some(std::sync::Arc::new(GpuPreviewRoute))),
+                Err(e) => log::error!("GPU preview route unavailable: {e}"),
+            }
         }
         #[cfg(target_os = "linux")]
         if amd_provider_enabled && let Some(renderer) = filmcraft_gpu::ExportRenderer::new() {
