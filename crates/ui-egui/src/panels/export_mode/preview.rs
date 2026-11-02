@@ -20,24 +20,39 @@ pub(super) fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Re
     let pv_area = Rect::from_min_size(rect.min + vec2(14.0, 14.0), vec2(rect.width() - 28.0, (rect.height() * 0.42).max(160.0)));
     let pic = crate::panels::monitor::fit(pv_area, r.width as f32, r.height as f32);
     ui.painter().rect_filled(pic, 0.0, Color32::BLACK);
-    // the GPU route has no CPU preview: it says so instead of compositing on the CPU
+    // the GPU route presents the sequence plan through the GPU compositor, as the Program monitor does
     let gpu_preview = super::effective_settings(&app.ui.export).gpu_rendering != GpuRendering::Off;
-    if app.ui.export.settings.has_video() && gpu_preview {
-        ui.painter().text(
-            pic.center(),
-            Align2::CENTER_CENTER,
-            tl!("Export preview unavailable in GPU-only mode; CPU fallback is disabled"),
-            Tokens::ui(12.0),
-            t.text_dim,
-        );
-    } else if app.ui.export.settings.has_video() {
+    if app.ui.export.settings.has_video() {
         let frame = rate.frame_at(app.session.playhead());
-        let key = FrameKey { target: Target::Sequence(seq_id), frame, size: 500, revision: app.session.revision, draft: false };
         let project = app.session.project.clone();
-        app.frames.request(key, rate.tick_of(frame), 0.5, &project, 0);
-        if let Some(img) = app.frames.get(&key) {
-            let ctx = ui.ctx().clone();
-            let tex = app.texture_for(&ctx, "export-preview", key, &img);
+        let mut notice: Option<String> = None;
+        let shown = if gpu_preview {
+            let key = FrameKey { target: Target::SequencePlan(seq_id), frame, size: 500, revision: app.session.revision, draft: false };
+            app.frames.request(key, rate.tick_of(frame), 0.5, &project, 0);
+            match app.frames.get_plan(&key) {
+                Some(plan) => {
+                    let old_status = app.ui.status.clone();
+                    let tex = app.gpu_present(key, &plan).map(|(id, _)| id);
+                    if tex.is_none() && app.ui.status != old_status {
+                        notice = Some(std::mem::replace(&mut app.ui.status, old_status));
+                    }
+                    tex
+                }
+                None => {
+                    notice = app.frames.plan_error(&key).or_else(|| app.gpu.is_none().then(|| tl!("GPU preview unavailable; CPU fallback is disabled").into()));
+                    None
+                }
+            }
+        } else {
+            let key = FrameKey { target: Target::Sequence(seq_id), frame, size: 500, revision: app.session.revision, draft: false };
+            app.frames.request(key, rate.tick_of(frame), 0.5, &project, 0);
+            let img = app.frames.get(&key);
+            img.map(|img| {
+                let ctx = ui.ctx().clone();
+                app.texture_for(&ctx, "export-preview", key, &img)
+            })
+        };
+        if let Some(tex) = shown {
             let inner = match app.ui.export.settings.scaling {
                 Scaling::StretchToFill => pic,
                 Scaling::ScaleToFit => crate::panels::monitor::fit(pic, q.settings.width as f32, q.settings.height as f32),
@@ -47,6 +62,8 @@ pub(super) fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Re
                 }
             };
             ui.painter().with_clip_rect(pic).image(tex, inner, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        } else if let Some(notice) = notice {
+            ui.painter().text(pic.center(), Align2::CENTER_CENTER, notice, Tokens::ui(12.0), t.text_dim);
         }
     } else {
         ui.painter().text(pic.center(), Align2::CENTER_CENTER, tl!("Audio only"), Tokens::ui(13.0), t.text_dim);
