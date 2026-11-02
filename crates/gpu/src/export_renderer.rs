@@ -499,6 +499,8 @@ impl ExportRenderer {
         output: wgpu::Buffer,
         coded_size: Option<(u32, u32)>,
     ) -> Result<(wgpu::Buffer, Nv12Layout, wgpu::SubmissionIndex), GpuPlanError> {
+        // The previous resident frame was waited on before this call; its own error must not refuse this frame.
+        self.begin_required_frame();
         self.check_required_admission()?;
         if !output.usage().contains(wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC) {
             return Err(strict_error(EligibilityFailure::InvalidParameter {
@@ -548,6 +550,8 @@ impl ExportRenderer {
         let _device_scopes = crate::device_scope::lock();
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let recorded = self.compositor.nv12_output.record_coded(&self.device, &mut encoder, &accum, &output, width, height, coded_width, coded_height);
+        // finish and submit sit inside the scope so their validation errors are captured too.
+        let submission = self.queue.submit([encoder.finish()]);
         let output_layout = match (recorded, crate::poll_now(scope.pop())) {
             (_, Some(Some(error))) => {
                 return Err(strict_error(EligibilityFailure::RuntimeFailure { stage: "resident NV12 output recording", detail: error.to_string() }));
@@ -566,7 +570,6 @@ impl ExportRenderer {
             }
             (Some(layout), Some(None)) => layout,
         };
-        let submission = self.queue.submit([encoder.finish()]);
         Ok((output, output_layout, submission))
     }
 }
