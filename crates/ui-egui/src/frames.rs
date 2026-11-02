@@ -1110,7 +1110,8 @@ fn provider(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>) -> J
 
 fn plan_job(job: &Job, seq: ItemId, pool: &Arc<MediaPool>, services: &Arc<dyn Services>) -> Result<(GpuPlanKind, bool), filmcraft_render::plan::GpuPlanError> {
     let opts = filmcraft_render::RenderOptions { scale: job.scale, captions: true, ..Default::default() };
-    let provider = provider(job, pool, services);
+    // Strict planning takes full-resolution frames: a proxy would not match the planned dimensions.
+    let provider = JobProvider { inner: pool.full_res_provider(job.project.clone(), services.clone()) };
     let receipt = filmcraft_render::plan::preflight_frame_required(&job.project, seq, job.time, opts)?;
     // A frame made only of GPU-generated demo scenes has no pixels to decode: it takes the resident route.
     // Any mix with decoded sources stays on the decoded route, which refuses demo scenes (fail-closed).
