@@ -542,8 +542,14 @@ fn runtime_ram_ceiling_is_separate_from_the_build_guard() {
 
 #[test]
 fn runtime_headroom_probe_does_not_panic() {
-    // shortcut: no upper-bound check (MemTotal not read here), upgrade to compare against /proc/meminfo MemTotal
-    let _ = crate::runtime_ram_headroom_kib();
+    let headroom = crate::runtime_ram_headroom_kib();
+    let total_kib = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|m| m.lines().find_map(|l| l.strip_prefix("MemTotal:")?.split_whitespace().next()?.parse::<u64>().ok()));
+    // headroom can never exceed the host's total RAM; skipped when MemTotal is unreadable
+    if let (Some(headroom), Some(total)) = (headroom, total_kib) {
+        assert!(headroom <= total, "headroom {headroom} KiB exceeds MemTotal {total} KiB");
+    }
 }
 
 #[test]
