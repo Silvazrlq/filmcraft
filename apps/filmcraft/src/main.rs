@@ -204,6 +204,8 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
         });
         #[cfg(target_os = "linux")]
         let amd_provider_enabled = graphics.mode() == graphics::Mode::Default;
+        // Software mode is an explicit choice of CPU compositing; `graphics` moves into the end-pass hook below.
+        let software = graphics.mode() == graphics::Mode::Software;
         let confirmed = AtomicBool::new(false);
         cc.egui_ctx.on_end_pass(
             "graphics-start",
@@ -271,11 +273,12 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             app.dialog = None;
         }
         app.integrated_titlebar = cfg!(target_os = "macos");
+        let cpu_composite = software || std::env::var_os("FILMCRAFT_CPU_COMPOSITE").is_some();
         if let Some(rs) = cc.wgpu_render_state.clone()
-            && std::env::var_os("FILMCRAFT_CPU_COMPOSITE").is_none()
+            && !cpu_composite
         {
             app.set_wgpu(rs);
-        } else if std::env::var_os("FILMCRAFT_CPU_COMPOSITE").is_some() {
+        } else if cpu_composite {
             app.enable_cpu_composite();
         }
         // Keep device selection available even when the default device is unavailable.
